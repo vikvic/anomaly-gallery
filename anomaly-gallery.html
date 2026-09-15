@@ -40,14 +40,49 @@
   .say.bad{color:var(--red);font-style:normal}
 
   /* ---- gallery ---- */
-  .gal{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:22px}
+  .gal{display:flex;justify-content:center}
+  .gal .plate{width:100%;max-width:660px}
+  .pos{font:13px ui-monospace,Menlo,Consolas,monospace;color:var(--dim);
+       letter-spacing:.06em;min-width:52px}
+  .rrows{text-align:left;margin:14px 0 18px;border-top:1px solid #2c251d}
+  .rrow{display:flex;justify-content:space-between;gap:12px;padding:6px 2px;
+        border-bottom:1px solid #221c16;font-size:12.5px}
+  .rrow span{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rrow b{font-weight:400;font-family:ui-monospace,Menlo,Consolas,monospace}
+  .rrow b.ok{color:var(--green)} .rrow b.no{color:var(--red)}
   .plate{position:relative}
-  .mount{background:linear-gradient(158deg,var(--frame),var(--frame2));padding:10px;border-radius:2px;
-       box-shadow:0 16px 36px rgba(0,0,0,.75),inset 0 0 0 1px rgba(255,255,255,.07)}
-  .mat{background:#080706;padding:6px;position:relative;overflow:hidden}
-  canvas{display:block;width:100%;height:auto;cursor:crosshair}
-  .mat::after{content:"";position:absolute;inset:6px;pointer-events:none;
-       background:radial-gradient(82% 68% at 50% 40%,transparent 46%,rgba(0,0,0,.5))}
+  /* The frame itself is feathered away rather than ending at a crisp rectangle:
+     two linear-gradient masks intersected, so all four edges fade over 44px
+     while the middle stays rectangular. A radial mask here would round the
+     plate into an oval; this keeps it a painting on a wall, lit from the front,
+     with the gilding falling off into the dark at the periphery.
+     Note a mask also clips box-shadow, so the drop shadow is gone by design —
+     the fade does that job now. */
+  .mount{background:linear-gradient(158deg,var(--frame),var(--frame2));padding:11px;border-radius:2px;
+       box-shadow:inset 0 0 0 1px rgba(255,255,255,.04),
+                  inset 0 0 34px 14px rgba(0,0,0,.7);
+       -webkit-mask-image:
+         linear-gradient(to right,transparent 0,#000 44px,#000 calc(100% - 44px),transparent 100%),
+         linear-gradient(to bottom,transparent 0,#000 44px,#000 calc(100% - 44px),transparent 100%);
+       -webkit-mask-composite:source-in;
+       mask-image:
+         linear-gradient(to right,transparent 0,#000 44px,#000 calc(100% - 44px),transparent 100%),
+         linear-gradient(to bottom,transparent 0,#000 44px,#000 calc(100% - 44px),transparent 100%);
+       mask-composite:intersect}
+  .mat{background:#000;padding:10px;position:relative;overflow:hidden}
+  /* The painting dissolves into the dark instead of ending at a crisp rectangle.
+     Two layers do it: a mask that fades the canvas edges to nothing against the
+     black mat, and a vignette over the top for depth. The inner ~55% is left
+     untouched so anomalies stay findable — the darkening only bites near the
+     border, where nothing is ever placed. */
+  canvas{display:block;width:100%;height:auto;cursor:crosshair;
+     -webkit-mask-image:radial-gradient(ellipse 98% 96% at 50% 46%,
+        #000 40%, rgba(0,0,0,.82) 68%, rgba(0,0,0,.28) 88%, rgba(0,0,0,0) 100%);
+     mask-image:radial-gradient(ellipse 98% 96% at 50% 46%,
+        #000 40%, rgba(0,0,0,.82) 68%, rgba(0,0,0,.28) 88%, rgba(0,0,0,0) 100%)}
+  .mat::after{content:"";position:absolute;inset:0;pointer-events:none;
+     background:radial-gradient(ellipse 94% 90% at 50% 44%,
+       rgba(0,0,0,0) 38%, rgba(0,0,0,.34) 62%, rgba(0,0,0,.80) 84%, rgba(0,0,0,1) 100%)}
   .cap{margin-top:8px;font-size:11px;color:#b3a184;letter-spacing:.05em;line-height:1.35}
   .cap b{display:block;font-weight:400;color:#d6c6a4}
   .cap i{color:#87775e}
@@ -70,13 +105,15 @@
 <div class="wrap">
   <header>
     <h1>Anomaly Gallery</h1>
-    <p class="tag">Five works. Five things that should not be there. Two minutes.</p>
+    <p class="tag">One painting at a time. Thirty seconds each. Find what should not be there.</p>
   </header>
 
   <div class="hud">
-    <div class="clock" id="clock">2:00</div>
+    <div class="clock" id="clock">30</div>
     <div class="barwrap"><div class="bar" id="bar"></div></div>
+    <div class="pos" id="pos">– / –</div>
     <div class="found">found <b id="nfound">0</b> / <span id="ntotal">5</span></div>
+    <button id="skip" disabled>Skip ahead</button>
     <button id="again">New gallery</button>
     <div class="say" id="say">Look closely. Click anything that is wrong.</div>
   </div>
@@ -120,7 +157,10 @@ function faceMetrics(f,W,H){
 
 /* ========================= harvest a body part ========================= */
 function harvestFeature(srcCanvas,f,ringName,opt={}){
-  const {expand=1.8,feather=0.32,tall=1.25}=opt;
+  // No alpha ramp here any more — the harvested patch comes out fully opaque and
+  // graftFeature does all the blending, converging pixel values toward the host.
+  // Two overlapping falloffs fought each other and produced the visible halo.
+  const {expand=1.8,tall=1.25}=opt;
   const W=srcCanvas.width,H=srcCanvas.height;
   const ring=RING[ringName].map(i=>({x:f[i].x*W,y:f[i].y*H}));
   let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9,cx=0,cy=0;
@@ -134,21 +174,18 @@ function harvestFeature(srcCanvas,f,ringName,opt={}){
   const x=c.getContext("2d",{willReadFrequently:true});
   x.drawImage(srcCanvas,cx-bw/2,cy-bh/2,bw,bh,0,0,c.width,c.height);
   const im=x.getImageData(0,0,c.width,c.height),d=im.data;
-  const rx=c.width/2,ry=c.height/2;
-  for(let py=0;py<c.height;py++)for(let px=0;px<c.width;px++){
-    const nx=(px-rx)/rx,ny=(py-ry)/ry,dd=Math.hypot(nx,ny);
-    let a=1-Math.max(0,Math.min(1,(dd-(1-feather))/feather));
-    a=a*a*(3-2*a);
-    d[(py*c.width+px)*4+3]=a*255;
-  }
+  for(let i=0;i<d.length;i+=4) d[i+3]=255;      // opaque; graftFeature blends
   x.putImageData(im,0,0);
   return {canvas:c,w:c.width,h:c.height,kind:ringName};
 }
 
 /* ========================= graft a part onto a surface ========================= */
 function graftFeature(ctx,W,H,part,target,opt={}){
-  const {sizeRel=2.0,rot=0.05,bulge=0.42,shadeAmt=0.45,gradeAmt=0.10,
-         crease=0.55,satKeep=1.35,alpha=0.97}=opt;
+  // coreFrac: fraction of the patch radius that stays pure feature before the
+  // blend toward the host begins. Lower dissolves more; higher keeps the
+  // anomaly legible enough to be findable. 0.55 is the balance.
+  const {sizeRel=2.0,rot=0.05,bulge=0.42,shadeAmt=0.45,
+         crease=0.45,satKeep=1.35,coreFrac=0.55}=opt;
   const pre=document.createElement("canvas");
   pre.width=part.w;pre.height=part.h;
   const pc=pre.getContext("2d",{willReadFrequently:true});
@@ -185,29 +222,36 @@ function graftFeature(ctx,W,H,part,target,opt={}){
   const px=Math.round(target.x-ew/2),py=Math.round(target.y-eh/2);
   const hx=Math.max(0,Math.min(W-ew,px)),hy=Math.max(0,Math.min(H-eh,py));
   const host=ctx.getImageData(hx,hy,ew,eh).data;
-  let hm=0,hr=0,hg=0,hb=0,n=0;
-  for(let i=0;i<host.length;i+=4){
-    hm+=host[i]*0.299+host[i+1]*0.587+host[i+2]*0.114;
-    hr+=host[i];hg+=host[i+1];hb+=host[i+2];n++;}
-  hm/=n;hr/=n;hg/=n;hb/=n;
+  let hm=0,n=0;
+  for(let i=0;i<host.length;i+=4){ hm+=host[i]*0.299+host[i+1]*0.587+host[i+2]*0.114; n++; }
+  hm/=n;
+  /* CONVERGE TO HOST rather than fade out.
+     Alpha-feathering left a visible coloured oval: the harvested pixels are
+     another painting's skin, and the transition was far too narrow (the inner
+     ~78% stayed fully opaque), so you saw a patch boundary made of colour.
+     Here every pixel is written opaque, but its VALUE is blended toward the
+     actual host pixel underneath. At the rim the output equals what was already
+     there, so there is no boundary to see; inward it becomes the feature. */
   const im=ox.getImageData(0,0,ew,eh),d=im.data;
   const cx2=ew/2,cy2=eh/2;
   for(let y=0;y<eh;y++)for(let x=0;x<ew;x++){
-    const i=(y*ew+x)*4;if(d[i+3]<4)continue;
+    const i=(y*ew+x)*4;
+    const nx=(x+0.5-cx2)/cx2, ny=(y+0.5-cy2)/cy2, r=Math.hypot(nx,ny);
+    let wgt;
+    if(r<=coreFrac) wgt=1;
+    else if(r>=1) wgt=0;
+    else { const t=1-(r-coreFrac)/(1-coreFrac); wgt=t*t*(3-2*t); }
     const hl=host[i]*0.299+host[i+1]*0.587+host[i+2]*0.114;
     const shade=1+((hl/Math.max(1,hm))-1)*shadeAmt;
-    const tg=[hr,hg,hb];
+    const k=r>0.55?Math.min(1,(r-0.55)/0.45)*crease:0;
     for(let c=0;c<3;c++){
-      let v=d[i+c]*shade;
-      v=v+(tg[c]-v)*gradeAmt*0.35;
-      d[i+c]=Math.max(0,Math.min(255,v));
+      const v=d[i+c]*shade*(1-k*0.55);
+      d[i+c]=Math.max(0,Math.min(255,host[i+c]*(1-wgt)+v*wgt));
     }
-    const nx=(x-cx2)/cx2,ny=(y-cy2)/cy2,rr=Math.hypot(nx,ny);
-    if(rr>0.55){const k=Math.min(1,(rr-0.55)/0.45)*crease;
-      for(let c=0;c<3;c++)d[i+c]*=(1-k*0.55);}
+    d[i+3]=255;                                   // opaque everywhere
   }
   ox.putImageData(im,0,0);
-  ctx.save();ctx.globalAlpha=alpha;
+  ctx.save();
   ctx.translate(target.x,target.y);ctx.rotate(rot);
   ctx.drawImage(off,-ew/2,-eh/2);ctx.restore();
   return [target.x-ew/2,target.y-eh/2,ew,eh];
@@ -248,21 +292,54 @@ function opDrift(ctx,W,H,f,k=1){
   liquify(ctx,W,H,[{x:e.x,y:e.y,dx:m.w*0.024*k,dy:m.h*0.030*k,r}]);
   return [e.x-r*0.75,e.y-r*0.75,r*1.5,r*1.5];
 }
+/* Base 0.13 of face height, not 0.075. At the old strength this was ~13px on a
+   164px face — perceptible only if you already knew where to look, which made
+   it the one op you could never fairly find. Tested up to 0.26: past roughly
+   0.20 the jaw becomes a tube and the mouth a vertical slot, which reads as
+   caricature rather than as a face that is wrong. 0.13 x 1.5 sits just under
+   that ceiling. The radius widens with it so the whole lower face lengthens
+   instead of the chin alone sliding down. */
 function opElongate(ctx,W,H,f,k=1){
-  const m=faceMetrics(f,W,H),c=pt(f,L.chin,W,H),r=m.h*0.34;
-  liquify(ctx,W,H,[{x:c.x,y:c.y,dx:0,dy:m.h*0.075*k,r}]);
-  return [c.x-r*0.7,c.y-r*0.7,r*1.4,r*1.4];
+  const m=faceMetrics(f,W,H),c=pt(f,L.chin,W,H),r=m.h*0.38;
+  const dy=m.h*0.13*k;
+  liquify(ctx,W,H,[{x:c.x,y:c.y,dx:0,dy,r}]);
+  return [c.x-r*0.7,c.y-r*0.65,r*1.4,r*1.3+dy*0.6];
 }
 
 /* ========================= target finding ========================= */
-function findBlob(ctx,W,H,pred,box={}){
+/* Distance transform over a predicate mask, returning the top local maxima.
+   Each is the centre of a coherent object, and `r` is the radius of the largest
+   circle that fits INSIDE it — so anything drawn within r of the centre is
+   guaranteed not to cross that object's boundary. */
+function findBlobs(ctx,W,H,pred,box={},opt={}){
   const {x0=0,y0=0,x1=W,y1=H}=box;
+  const {n=6,minR=8,close=5}=opt;
   const d=ctx.getImageData(0,0,W,H).data;
-  const m=new Float32Array(W*H);
+  let bin=new Float32Array(W*H);
   for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){
     const k=(y*W+x)*4;
-    m[y*W+x]=pred(d[k],d[k+1],d[k+2])?Infinity:0;
+    bin[y*W+x]=pred(d[k],d[k+1],d[k+2])?1:0;
   }
+  /* Morphological closing, as a separable box blur re-thresholded.
+     Without it a single apple fragments: the predicate rejects its specular
+     highlight and its shadowed side, so the mask becomes several slivers and
+     the inscribed radius badly underestimates the object — r=11 for fruit that
+     is really r=21. Closing roughly doubles the radii and is the difference
+     between "no target fits" and a graft that sits inside the fruit. */
+  if(close>0){
+    const tmp=new Float32Array(W*H), out=new Float32Array(W*H), win=close*2+1;
+    for(let y=y0;y<y1;y++){ let s=0;
+      for(let x=x0;x<x1;x++){ s+=bin[y*W+x];
+        if(x-x0>=win) s-=bin[y*W+x-win];
+        tmp[y*W+Math.max(x0,x-close)]=s/win; } }
+    for(let x=x0;x<x1;x++){ let s=0;
+      for(let y=y0;y<y1;y++){ s+=tmp[y*W+x];
+        if(y-y0>=win) s-=tmp[(y-win)*W+x];
+        out[Math.max(y0,y-close)*W+x]=s/win; } }
+    for(let i=0;i<W*H;i++) bin[i]=out[i]>0.42?1:0;
+  }
+  const m=new Float32Array(W*H);
+  for(let i=0;i<W*H;i++) m[i]=bin[i]?Infinity:0;
   for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){
     const i=y*W+x;if(m[i]===0)continue;
     let v=m[i];
@@ -272,7 +349,7 @@ function findBlob(ctx,W,H,pred,box={}){
     if(x<x1-1&&y>y0)v=Math.min(v,m[i-W+1]+1.414);
     m[i]=v;
   }
-  let bi=-1,bv=0;
+  const cand=[];
   for(let y=y1-1;y>=y0;y--)for(let x=x1-1;x>=x0;x--){
     const i=y*W+x;if(m[i]===0)continue;
     let v=m[i];
@@ -281,9 +358,18 @@ function findBlob(ctx,W,H,pred,box={}){
     if(x<x1-1&&y<y1-1)v=Math.min(v,m[i+W+1]+1.414);
     if(x>x0&&y<y1-1)v=Math.min(v,m[i+W-1]+1.414);
     m[i]=v;
-    if(v>bv){bv=v;bi=i;}
+    if(v>=minR) cand.push({x,y,r:v});
   }
-  return bi<0||bv<7?null:{x:bi%W,y:(bi/W)|0,r:Math.round(bv)};
+  // Non-max suppression: keep maxima that do not sit inside an already-kept
+  // circle, so we get one candidate per object rather than a cluster on one.
+  cand.sort((a,b)=>b.r-a.r);
+  const keep=[];
+  for(const c of cand){
+    if(keep.some(k=>Math.hypot(k.x-c.x,k.y-c.y)<k.r)) continue;
+    keep.push({x:c.x,y:c.y,r:Math.round(c.r)});
+    if(keep.length>=n) break;
+  }
+  return keep;
 }
 const warmMass=(r,g,b)=>{const [h,s,l]=rgb2hsl(r,g,b);
   return (h<44||h>330)&&s>0.38&&l>0.18&&l<0.78;};
@@ -297,11 +383,22 @@ function validBlob(b,box){
   if(b.x-clear<box.x0||b.x+clear>box.x1||b.y-clear<box.y0||b.y+clear>box.y1) return null;
   return b;
 }
-/* Grafts must be big enough to be findable but not so big they look pasted.
-   Clamp the drawn size to an absolute band regardless of blob radius. */
-function graftSize(blobR,minPx,maxPx){
-  const want=blobR*2*2.0;
-  return Math.max(minPx,Math.min(maxPx,want))/(blobR*2);
+/* Fit a graft INSIDE the object instead of over it.
+   `r` from findBlobs is the inscribed radius, so a w×h box centred on the blob
+   stays within the object exactly when its half-diagonal <= r. For an eye
+   (h ≈ 0.45w) that caps width at about 1.8r.
+
+   The previous version clamped the drawn size to an absolute pixel band and
+   ignored r completely — on a small fruit (r=9, i.e. 18px across) it still drew
+   a 38px eye, which is why grafts spilled across object boundaries. Returns
+   null when the object is simply too small to host a legible graft, so the
+   caller can try the next candidate rather than forcing a bad one. */
+function fitGraft(blobR,aspect,minPx,maxPx){
+  const halfDiag=Math.sqrt(1+aspect*aspect)/2;   // per unit of width
+  const maxW=(blobR*0.94)/halfDiag;              // 6% margin inside the edge
+  const w=Math.min(maxW,maxPx);
+  if(w<minPx) return null;
+  return w/(blobR*2);                            // -> sizeRel for graftFeature
 }
 
 /* ========================= sources ========================= */
@@ -356,7 +453,7 @@ async function resolveAll(titles){
 }
 
 /* ========================= game ========================= */
-const DUR=120000, PENALTY=3000, DISPW=470;
+const ROUND_MS=30000, PENALTY=3000, DISPW=620;
 let STATE=null, TICK=null;
 
 const shuffle=a=>{for(let i=a.length-1;i>0;i--){const j=(Math.random()*(i+1))|0;[a[i],a[j]]=[a[j],a[i]];}return a;};
@@ -374,6 +471,7 @@ async function landmarker(){
 
 async function build(){
   clearInterval(TICK);
+  stopAllBlinking();          // a previous round's blink would outlive its canvas
   $("#veil").classList.remove("on");
   $("#gal").innerHTML='<div class="boot">Unlocking the wing…</div>';
   $("#again").disabled=true;
@@ -434,14 +532,28 @@ async function build(){
     // curated manifests carry a pre-computed, hand-checked target in normalised
     // coords — no distance transform at load, and no bad targets slipping through
     if(w.spec.blob){
-      w.blob={x:Math.round(w.spec.blob.x*w.W),
-              y:Math.round(w.spec.blob.y*w.H),
-              r:Math.round(w.spec.blob.r*w.W)};
+      w.blobs=[{x:Math.round(w.spec.blob.x*w.W),
+                y:Math.round(w.spec.blob.y*w.H),
+                r:Math.round(w.spec.blob.r*w.W)}];
     }else{
-      w.blob=validBlob(findBlob(ctx,w.W,w.H,warmMass,box),box)
-          || validBlob(findBlob(ctx,w.W,w.H,anyMass,box),box);
+      // Keep several candidates, largest first. One target is not enough: if the
+      // biggest object is too small to host a legible eye we need somewhere else
+      // to put it, rather than oversizing the graft past the object's edge.
+      let cands=findBlobs(ctx,w.W,w.H,warmMass,box,{n:6})
+                  .map(b=>validBlob(b,box)).filter(Boolean);
+      if(cands.length<2){
+        for(const c of findBlobs(ctx,w.W,w.H,anyMass,box,{n:6}).map(b=>validBlob(b,box)).filter(Boolean)){
+          if(!cands.some(k=>Math.hypot(k.x-c.x,k.y-c.y)<Math.max(k.r,c.r))) cands.push(c);
+        }
+      }
+      cands.sort((a,b)=>b.r-a.r);
+      w.blobs=cands;
     }
+    w.blob=w.blobs[0]||null;
+    // can any candidate host a graft at all? (nominal eye aspect 0.5)
+    w.graftable=w.blobs.some(b=>fitGraft(b.r,0.5,w.W*0.055,w.W*0.14)!==null);
     w.clean=ctx.getImageData(0,0,w.W,w.H);
+    w.cleanCv=snap(w.canvas);       // the painting before any anomaly — the "lid"
   }
 
   // harvest parts from a hi-res portrait
@@ -462,89 +574,315 @@ async function build(){
     }
   }
 
-  // candidate anomalies
-  const cands=[];
+  // ---- one round per painting: each gets 1–2 anomalies, or is dropped ----
+  const rounds=[];
   works.forEach((w,i)=>{
+    const opts=[];
     if(w.face){
-      cands.push({i,op:"rictus",  w:0.9});
-      cands.push({i,op:"drift",   w:1.0});
-      cands.push({i,op:"elongate",w:0.7});
+      opts.push({op:"drift",   wt:1.0});
+      opts.push({op:"rictus",  wt:0.9});
+      opts.push({op:"elongate",wt:0.9});   // was 0.7 — no longer the weak one
     }
-    if(w.blob&&parts.length) cands.push({i,op:"graft",w:1.3});
+    if(w.graftable&&parts.length) opts.push({op:"graft",wt:1.4});
+    if(!opts.length) return;                 // nothing placeable — leave it out
+    shuffle(opts);
+    opts.sort((a,b)=>b.wt*Math.random()-a.wt*Math.random());
+    const take=[opts[0]];
+    // a second only when it is a different family, so one face isn't warped twice
+    const second=opts.find(o=>o!==opts[0] && (o.op==="graft")!==(opts[0].op==="graft"));
+    if(second && Math.random()<0.5) take.push(second);
+    rounds.push({work:i,ops:take.map(t=>t.op)});
   });
-  if(!cands.length){ fail("No anomaly could be placed. Press New gallery."); return; }
+  if(!rounds.length){ fail("No anomaly could be placed. Press New gallery."); return; }
+  shuffle(rounds);
+  rounds.length=Math.min(rounds.length,5);
 
-  // pick up to 5, at most 2 per painting, prefer spreading across works
-  shuffle(cands);
-  cands.sort((a,b)=>b.w*Math.random()-a.w*Math.random());
-  const perWork={}, picked=[];
-  for(const c of cands){
-    if(picked.length>=5) break;
-    perWork[c.i]=perWork[c.i]||0;
-    if(perWork[c.i]>=2) continue;
-    if(picked.some(p=>p.i===c.i&&p.op===c.op)) continue;
-    // don't stack two face warps on the same face
-    if(perWork[c.i]===1 && c.op!=="graft" && picked.some(p=>p.i===c.i&&p.op!=="graft")) continue;
-    perWork[c.i]++; picked.push(c);
-  }
-
-  // apply
+  // ---- apply ----
   const anomalies=[];
-  for(const p of picked){
-    const w=works[p.i];
+  for(const r of rounds){
+    const w=works[r.work];
     const ctx=w.canvas.getContext("2d",{willReadFrequently:true});
-    let box=null, label="";
-    if(p.op==="rictus"){ box=opRictus(ctx,w.W,w.H,w.face,1.0); label="the mouth is not a mouth a face can make"; }
-    else if(p.op==="drift"){ box=opDrift(ctx,w.W,w.H,w.face,1.6); label="one eye has drifted out of true"; }
-    else if(p.op==="elongate"){ box=opElongate(ctx,w.W,w.H,w.face,1.1); label="the jaw has been drawn down"; }
-    else {
-      const part=parts[(Math.random()*parts.length)|0];
-      const sz=graftSize(w.blob.r,38,72)*(part.kind==="mouth"?0.85:1);
-      box=graftFeature(ctx,w.W,w.H,part,w.blob,{
-        sizeRel:sz,
-        rot:(Math.random()-0.5)*0.35,bulge:0.42,shadeAmt:0.45,
-        gradeAmt:0.10,crease:0.55,satKeep:1.35});
-      label=part.kind==="mouth"?"there is a mouth on it":"there is an eye on it";
+    w.anomalies=[];
+    for(const op of r.ops){
+      let box=null,label="",kind=null,tone=null,grain=null;
+      if(op==="rictus"){ box=opRictus(ctx,w.W,w.H,w.face,1.0); label="the mouth is not one a face can make"; }
+      else if(op==="drift"){ box=opDrift(ctx,w.W,w.H,w.face,1.6); label="one eye has drifted out of true"; }
+      else if(op==="elongate"){ box=opElongate(ctx,w.W,w.H,w.face,1.5); label="the jaw has been drawn down"; }
+      else{
+        const part=parts[(Math.random()*parts.length)|0];
+        const aspect=part.h/part.w;
+        // walk candidates largest-first and take the first that can hold the
+        // graft entirely inside its own boundary
+        let target=null,sz=null;
+        for(const b of w.blobs){
+          const s=fitGraft(b.r,aspect,w.W*0.055,w.W*0.14);
+          if(s){ target=b; sz=s*(part.kind==="mouth"?0.9:1); break; }
+        }
+        if(!target) continue;
+        box=graftFeature(ctx,w.W,w.H,part,target,{
+          sizeRel:sz,
+          rot:(Math.random()-0.5)*0.30,bulge:0.42,shadeAmt:0.45,
+          crease:0.45,satKeep:1.35,coreFrac:0.55});
+        kind=part.kind;                       // "eyeL" | "eyeR" | "mouth"
+        if(kind==="mouth"){
+          // sampled once at build time — the cavity's palette and surface noise
+          tone=shadowTone(w.cleanCv,target.x,target.y,Math.round(target.r*3));
+          grain=grainFrom(w.cleanCv,target.x-40,target.y-40,70,50);
+        }
+        label=part.kind==="mouth"?"there is a mouth where none belongs"
+                                 :"there is an eye where none belongs";
+      }
+      const a={op,box,label,kind,tone,grain,found:false};
+      w.anomalies.push(a); anomalies.push(a);
     }
-    anomalies.push({work:p.i,op:p.op,box,label,found:false});
     w.dirty=ctx.getImageData(0,0,w.W,w.H);
+    w.dirtyCv=snap(w.canvas);       // the altered painting — the "eye open" state
   }
+  // a round whose ops all failed to place would be unwinnable
+  for(let i=rounds.length-1;i>=0;i--)
+    if(!works[rounds[i].work].anomalies.length) rounds.splice(i,1);
+  if(!rounds.length){ fail("No anomaly could be placed. Press New gallery."); return; }
 
-  STATE={works,anomalies,found:0,total:anomalies.length,
-         endAt:performance.now()+DUR,over:false};
+  STATE={works,rounds,idx:-1,anomalies,found:0,
+         total:anomalies.length,over:false,roundOver:true,endAt:0};
   $("#ntotal").textContent=STATE.total;
   $("#nfound").textContent="0";
-  paint();
   $("#again").disabled=false;
-  $("#say").className="say";
-  $("#say").textContent="Look closely. Click anything that is wrong.";
+  nextRound();
+}
+
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const snap=cv=>{const c=document.createElement("canvas");c.width=cv.width;c.height=cv.height;
+  c.getContext("2d").drawImage(cv,0,0);return c;};
+
+/* ============================================================================
+   BLINK — the reward, not the anomaly.
+   Motion is the strongest salience cue the visual system has, so a blinking eye
+   during the hunt would be findable in peripheral vision without looking at the
+   painting at all. It stays perfectly still until the player clicks it; then it
+   blinks at once, and keeps blinking.
+
+   There is no eyelid sprite. The lid is the host surface itself, taken from the
+   pre-anomaly painting and swept down over the graft — the fruit skinning back
+   over its own eye. Only grafts blink: for a face warp the clean layer holds the
+   *un-warped* feature, so sweeping it would reveal the answer rather than blink.
+   ========================================================================== */
+function drawBlink(w,a,p){
+  const g=w.canvas.getContext("2d");
+  const X=Math.max(0,Math.floor(a.box[0])), Y=Math.max(0,Math.floor(a.box[1]));
+  const BW=Math.min(w.W-X,Math.ceil(a.box[2])), BH=Math.min(w.H-Y,Math.ceil(a.box[3]));
+  if(BW<=0||BH<=0) return;
+  g.drawImage(w.dirtyCv, X,Y,BW,BH, X,Y,BW,BH);              // open
+  if(p<=0.001) return;
+  /* The lid's leading edge is feathered for the same reason the cavity is: a
+     straight drawImage of the clean layer leaves a hard horizontal cut across
+     painted texture. Sides and top need no feather — the graft's own alpha
+     already falls to zero there, so clean and dirty agree at the box border. */
+  const lid=BH*p, f=Math.min(4,Math.max(1.5,BH*0.22));
+  const off=document.createElement("canvas"); off.width=BW; off.height=BH;
+  const o=off.getContext("2d");
+  o.drawImage(w.cleanCv, X,Y,BW,BH, 0,0,BW,BH);
+  o.globalCompositeOperation="destination-in";
+  const gr=o.createLinearGradient(0,lid-f,0,lid);
+  gr.addColorStop(0,"rgba(0,0,0,1)"); gr.addColorStop(1,"rgba(0,0,0,0)");
+  o.fillStyle=gr; o.fillRect(0,0,BW,BH);
+  g.drawImage(off,X,Y);                                       // host surface closes over it
+}
+function startBlinking(w,a){
+  if(a.blinking) return;
+  a.blinking=true;
+  const CLOSE=90, HOLD=70, OPEN=130, TOTAL=CLOSE+HOLD+OPEN;
+  const cycle=()=>{
+    if(!a.blinking||!STATE||STATE.over) return;
+    const t0=performance.now();
+    const step=()=>{
+      if(!a.blinking||!STATE||STATE.over) return;
+      const t=performance.now()-t0;
+      let p;
+      if(t<CLOSE) p=t/CLOSE;
+      else if(t<CLOSE+HOLD) p=1;
+      else if(t<TOTAL) p=1-(t-CLOSE-HOLD)/OPEN;
+      else p=0;
+      drawBlink(w,a,p);
+      if(t<TOTAL) a.raf=requestAnimationFrame(step);
+      else { drawBlink(w,a,0); a.timer=setTimeout(cycle, 2400+Math.random()*3600); }
+    };
+    a.raf=requestAnimationFrame(step);
+  };
+  cycle();                                    // blink immediately on being found
+}
+function stopBlinking(a){
+  a.blinking=false;
+  if(a.raf) cancelAnimationFrame(a.raf);
+  if(a.timer) clearTimeout(a.timer);
+  a.raf=a.timer=null;
+}
+function stopAllBlinking(){
+  if(!STATE||!STATE.anomalies) return;
+  for(const a of STATE.anomalies) stopBlinking(a);
+}
+
+/* ============================================================================
+   MOUTH — a cavity opening, which is NOT a blink in reverse.
+   Neither layer contains a dark interior: the clean layer is undisturbed fruit,
+   the dirty layer a closed painted mouth. The cavity has to be synthesised, and
+   the thing that keeps it looking painted rather than like a hole punched in the
+   canvas is that it is never black. Old-master shadows are warm browns, so the
+   fill is sampled from the painting's own darkest tones and the canvas grain is
+   laid back over the top.
+   ========================================================================== */
+function shadowTone(cv,cx,cy,rad){
+  const x=Math.max(0,Math.round(cx-rad)),y=Math.max(0,Math.round(cy-rad));
+  const w=Math.min(cv.width-x,Math.round(rad*2)),h=Math.min(cv.height-y,Math.round(rad*2));
+  if(w<2||h<2) return [40,32,26];
+  const d=cv.getContext("2d",{willReadFrequently:true}).getImageData(x,y,w,h).data;
+  const l=[];
+  for(let i=0;i<d.length;i+=4) l.push([d[i]*.299+d[i+1]*.587+d[i+2]*.114,i]);
+  l.sort((a,b)=>a[0]-b[0]);
+  const take=Math.max(1,Math.floor(l.length*0.12));   // darkest 12%
+  let r=0,g=0,b=0;
+  for(let k=0;k<take;k++){const i=l[k][1];r+=d[i];g+=d[i+1];b+=d[i+2];}
+  return [r/take,g/take,b/take];
+}
+function grainFrom(cv,sx,sy,sw,sh){
+  sx=Math.max(0,sx);sy=Math.max(0,sy);
+  sw=Math.min(cv.width-sx,sw);sh=Math.min(cv.height-sy,sh);
+  if(sw<3||sh<3) return null;
+  const s=cv.getContext("2d",{willReadFrequently:true}).getImageData(sx,sy,sw,sh).data;
+  const hp=new Float32Array(sw*sh);
+  for(let y=0;y<sh;y++)for(let x=0;x<sw;x++){
+    let sum=0,n=0;
+    for(let j=-1;j<=1;j++)for(let i=-1;i<=1;i++){
+      const px=x+i,py=y+j; if(px<0||py<0||px>=sw||py>=sh)continue;
+      const k=(py*sw+px)*4; sum+=s[k]*.299+s[k+1]*.587+s[k+2]*.114; n++;
+    }
+    const k=(y*sw+x)*4,l=s[k]*.299+s[k+1]*.587+s[k+2]*.114;
+    hp[y*sw+x]=l-sum/n;
+  }
+  return {hp,w:sw,h:sh};
+}
+function drawMouth(w,a,p){
+  const ctx=w.canvas.getContext("2d",{willReadFrequently:true});
+  const [bx,by,bw,bh]=a.box;
+  const X=Math.max(0,Math.floor(bx)),Y=Math.max(0,Math.floor(by));
+  const BW=Math.min(w.W-X,Math.ceil(bw)),BH=Math.min(w.H-Y,Math.ceil(bh));
+  if(BW<=0||BH<=0) return;
+  ctx.drawImage(w.dirtyCv,X,Y,BW,BH,X,Y,BW,BH);      // shut
+  if(p<=0.001) return;
+  const tone=a.tone||[40,32,26];
+  const cx=bx+bw/2, cy=by+bh*0.52;
+  const aw=bw*0.74, ah=bh*0.90*p;                    // corners stay shut
+  if(ah<1) return;
+  const dark=[tone[0]*0.30,tone[1]*0.28,tone[2]*0.26];
+  const mid =[tone[0]*0.62,tone[1]*0.58,tone[2]*0.55];
+  const rim =[Math.min(255,tone[0]*1.45),Math.min(255,tone[1]*1.35),Math.min(255,tone[2]*1.25)];
+  const rgb=c=>`rgb(${c.map(v=>Math.round(v)).join(",")})`;
+  /* Built on an offscreen and composited with a per-pixel feathered alpha.
+     ctx.clip() on an ellipse gives a 1px vector boundary, and against painted
+     texture that hard edge is the single thing that makes the cavity read as
+     pasted on. The feather band is computed in normalised ellipse space but
+     floored in pixels, so a thin aperture still gets a visible soft edge. */
+  const A=aw/2, Bx=ah/2;
+  /* Feather as a CONSTANT PIXEL WIDTH inward from the boundary, not a fraction
+     of the radius. The aperture is only ~10px tall, so a fractional band ate 66%
+     of it and the cavity never reached full opacity — it read as a translucent
+     smudge rather than a hole. This keeps the core solid at any size. */
+  const FE=Math.min(2.6,Math.max(1.1,Math.min(A,Bx)*0.34));
+  const lx=cx-X, ly=cy-Y;                     // aperture centre in offscreen space
+  const off=document.createElement("canvas"); off.width=BW; off.height=BH;
+  const o=off.getContext("2d",{willReadFrequently:true});
+  const g=o.createRadialGradient(lx,ly-ah*0.18,Math.max(1,ah*0.05),lx,ly,Math.max(aw,ah)/2);
+  g.addColorStop(0,rgb(dark)); g.addColorStop(0.62,rgb(mid)); g.addColorStop(1,rgb(rim));
+  o.fillStyle=g; o.fillRect(0,0,BW,BH);
+  const sh=o.createLinearGradient(0,ly-ah/2,0,ly+ah*0.1);     // roof of the cavity
+  sh.addColorStop(0,"rgba(0,0,0,0.55)"); sh.addColorStop(1,"rgba(0,0,0,0)");
+  o.fillStyle=sh; o.fillRect(0,0,BW,BH);
+  o.save();                                                   // lit rim, feathered with the rest
+  o.beginPath(); o.ellipse(lx,ly,aw/2,ah/2,0,0,Math.PI*2);
+  o.strokeStyle=`rgba(${rim.map(v=>Math.round(v)).join(",")},0.5)`;
+  o.lineWidth=Math.max(0.8,ah*0.06); o.stroke(); o.restore();
+  const im=o.getImageData(0,0,BW,BH), d=im.data;
+  for(let y=0;y<BH;y++)for(let x=0;x<BW;x++){
+    const i=(y*BW+x)*4;
+    // distance from the ellipse F=1 is approximately (1-F)*F / |grad F|
+    const nx=(x+0.5-lx)/A, ny=(y+0.5-ly)/Bx, F=Math.hypot(nx,ny);
+    let al;
+    if(F<=1e-6) al=1;
+    else{
+      const grad=Math.hypot(nx/A,ny/Bx);
+      const dist=(1-F)*F/Math.max(1e-6,grad);          // px inward from the edge
+      al = dist<=0 ? 0 : dist>=FE ? 1 : (t=>t*t*(3-2*t))(dist/FE);
+    }
+    if(al>0&&a.grain){
+      const gg=a.grain.hp[(y%a.grain.h)*a.grain.w+(x%a.grain.w)]*0.55;
+      for(let c=0;c<3;c++) d[i+c]=Math.max(0,Math.min(255,d[i+c]+gg));
+    }
+    d[i+3]=Math.round(al*255);
+  }
+  o.putImageData(im,0,0);
+  ctx.drawImage(off,X,Y);
+}
+/* Slower than a blink on purpose — an unhurried opening is worse than a fast one. */
+function startMouthing(w,a){
+  if(a.blinking) return;
+  a.blinking=true;
+  const OPEN=430, HOLD=900, SHUT=540, TOTAL=OPEN+HOLD+SHUT;
+  const cycle=()=>{
+    if(!a.blinking||!STATE||STATE.over) return;
+    const t0=performance.now();
+    const step=()=>{
+      if(!a.blinking||!STATE||STATE.over) return;
+      const t=performance.now()-t0;
+      let p;
+      if(t<OPEN) p=t/OPEN;
+      else if(t<OPEN+HOLD) p=1;
+      else if(t<TOTAL) p=1-(t-OPEN-HOLD)/SHUT;
+      else p=0;
+      drawMouth(w,a,p*p*(3-2*p));                    // ease
+      if(t<TOTAL) a.raf=requestAnimationFrame(step);
+      else { drawMouth(w,a,0); a.timer=setTimeout(cycle, 3200+Math.random()*4200); }
+    };
+    a.raf=requestAnimationFrame(step);
+  };
+  cycle();
+}
+
+function nextRound(){
+  if(!STATE||STATE.over) return;
+  clearInterval(TICK);
+  STATE.idx++;
+  if(STATE.idx>=STATE.rounds.length){ finish(); return; }
+  const w=STATE.works[STATE.rounds[STATE.idx].work];
+  STATE.roundOver=false;
+  STATE.endAt=performance.now()+ROUND_MS;
+  paintOne(w);
+  $("#pos").textContent=`${STATE.idx+1} / ${STATE.rounds.length}`;
+  $("#skip").disabled=false;
+  const n=w.anomalies.length;
+  say("", n===1 ? "One thing here is wrong." : `${n} things here are wrong.`);
   TICK=setInterval(tick,100);
   tick();
 }
 
-function paint(){
+function paintOne(w){
   const gal=$("#gal"); gal.innerHTML="";
-  STATE.works.forEach((w,i)=>{
-    const plate=document.createElement("div");
-    plate.className="plate";
-    plate.innerHTML=`<div class="mount"><div class="mat"></div></div>
-      <div class="cap"><b>${esc(w.spec.n)}</b><i>${esc(w.spec.a)}${w.spec.y?" · "+esc(w.spec.y):""}</i></div>`;
-    plate.querySelector(".mat").appendChild(w.canvas);
-    w.canvas.addEventListener("click",ev=>onClick(ev,i));
-    gal.appendChild(plate);
-    w.plate=plate;
-  });
+  const plate=document.createElement("div");
+  plate.className="plate";
+  plate.innerHTML=`<div class="mount"><div class="mat"></div></div>
+    <div class="cap"><b>${esc(w.spec.n)}</b><i>${esc(w.spec.a)}${w.spec.y?" · "+esc(w.spec.y):""}</i></div>`;
+  plate.querySelector(".mat").appendChild(w.canvas);
+  w.canvas.onclick=ev=>onClick(ev,w);
+  gal.appendChild(plate);
+  w.plate=plate;
 }
-const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
-function onClick(ev,wi){
-  if(!STATE||STATE.over) return;
-  const c=STATE.works[wi].canvas;
-  const r=c.getBoundingClientRect();
+function onClick(ev,w){
+  if(!STATE||STATE.over||STATE.roundOver) return;
+  const c=w.canvas, r=c.getBoundingClientRect();
   const x=(ev.clientX-r.left)*(c.width/r.width);
   const y=(ev.clientY-r.top)*(c.height/r.height);
-  const hit=STATE.anomalies.find(a=>{
-    if(a.found||a.work!==wi) return false;
+  const hit=w.anomalies.find(a=>{
+    if(a.found) return false;
     const [bx,by,bw,bh]=a.box, pad=14;
     return x>=bx-pad&&x<=bx+bw+pad&&y>=by-pad&&y<=by+bh+pad;
   });
@@ -552,12 +890,40 @@ function onClick(ev,wi){
     hit.found=true; STATE.found++;
     $("#nfound").textContent=STATE.found;
     ringMark(c,hit.box,"rgba(127,163,104,.95)");
-    say("good","Found it — "+hit.label+".");
-    if(STATE.found>=STATE.total) finish(true);
+    // the reward: it was still while you looked for it, and now it isn't
+    if(hit.op==="graft"){
+      if(hit.kind==="mouth") startMouthing(w,hit);   // a cavity opens
+      else                   startBlinking(w,hit);   // an eye blinks
+    }
+    const left=w.anomalies.filter(a=>!a.found).length;
+    if(left===0){ say("good","Found it — "+hit.label+"."); endRound(true); }
+    else say("good",`Found it — ${hit.label}. ${left} more here.`);
   }else{
     STATE.endAt-=PENALTY;
     say("bad","Nothing wrong there. −3 seconds.");
   }
+}
+
+/* Ends the current painting: reveals anything missed, then moves on. Called by
+   the clock running out, by clearing the painting, and by Skip. */
+function endRound(cleared){
+  if(!STATE||STATE.roundOver) return;
+  STATE.roundOver=true;
+  clearInterval(TICK);
+  $("#skip").disabled=true;
+  const w=STATE.works[STATE.rounds[STATE.idx].work];
+  const missed=w.anomalies.filter(a=>!a.found);
+  for(const a of missed) ringMark(w.canvas,a.box,"rgba(184,53,44,.9)",[6,4]);
+  w.plate.classList.add("lock");
+  if(missed.length) say("bad","Missed — "+missed.map(m=>m.label).join("; ")+".");
+  // linger when a found graft is blinking, so the beat has time to land —
+  // Skip ahead is there for anyone who would rather not watch it
+  // a mouth cycle is ~1.9s against a blink's 0.3s, so it needs longer to land
+  const anim=w.anomalies.find(a=>a.found&&a.blinking);
+  const wait = missed.length ? 2000
+             : anim ? (anim.kind==="mouth" ? 3400 : 2800)
+             : 900;
+  setTimeout(()=>{ for(const a of w.anomalies) stopBlinking(a); nextRound(); }, wait);
 }
 function ringMark(canvas,box,colour,dash){
   const g=canvas.getContext("2d");
@@ -571,35 +937,35 @@ function ringMark(canvas,box,colour,dash){
 function say(cls,msg){ $("#say").className="say "+(cls||""); $("#say").textContent=msg; }
 
 function tick(){
-  if(!STATE||STATE.over) return;
+  if(!STATE||STATE.over||STATE.roundOver) return;
   const left=Math.max(0,STATE.endAt-performance.now());
   const s=Math.ceil(left/1000);
   const cl=$("#clock");
-  cl.textContent=`${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
-  cl.className="clock"+(s<=10?" crit":s<=30?" warn":"");
+  cl.textContent=String(s).padStart(2,"0");
+  cl.className="clock"+(s<=5?" crit":s<=10?" warn":"");
   const bar=$("#bar");
-  bar.style.width=(left/DUR*100)+"%";
-  bar.className="bar"+(s<=10?" crit":"");
-  if(left<=0) finish(false);
+  bar.style.width=(left/ROUND_MS*100)+"%";
+  bar.className="bar"+(s<=5?" crit":"");
+  if(left<=0) endRound(false);
 }
 
-function finish(won){
+function finish(){
   STATE.over=true; clearInterval(TICK);
-  const missed=STATE.anomalies.filter(a=>!a.found);
-  for(const a of missed) ringMark(STATE.works[a.work].canvas,a.box,"rgba(184,53,44,.9)",[6,4]);
-  for(const w of STATE.works) w.plate.classList.add("lock");
-  const left=Math.max(0,STATE.endAt-performance.now());
-  const s=Math.ceil(left/1000);
-  $("#card").innerHTML= won
-    ? `<h2>All found</h2>
-       <p class="score">${Math.floor(s/60)}:${String(s%60).padStart(2,"0")} left</p>
-       <p>You caught all ${STATE.total}. The gallery is as it should be.</p>
-       <button id="go2">New gallery</button>`
-    : `<h2>Time</h2>
-       <p class="score bad">${STATE.found} / ${STATE.total}</p>
-       <p>${missed.length} ${missed.length===1?"thing":"things"} still wrong, now marked in red:<br>
-          <i>${missed.map(m=>esc(m.label)).join("<br>")}</i></p>
-       <button id="go2">New gallery</button>`;
+  stopAllBlinking();
+  $("#skip").disabled=true;
+  const all=STATE.found===STATE.total;
+  const rows=STATE.rounds.map(r=>{
+    const w=STATE.works[r.work];
+    const got=w.anomalies.filter(a=>a.found).length;
+    const n=w.anomalies.length;
+    return `<div class="rrow"><span>${esc(w.spec.n)}</span>
+            <b class="${got===n?"ok":"no"}">${got}/${n}</b></div>`;
+  }).join("");
+  $("#card").innerHTML=`
+    <h2>${all?"All found":"Gallery closed"}</h2>
+    <p class="score${all?"":" bad"}">${STATE.found} / ${STATE.total}</p>
+    <div class="rrows">${rows}</div>
+    <button id="go2">New gallery</button>`;
   $("#veil").classList.add("on");
   $("#go2").onclick=()=>build().catch(e=>fail(e.message));
 }
@@ -610,6 +976,7 @@ function fail(msg){
 }
 
 $("#again").addEventListener("click",()=>build().catch(e=>fail(e.message)));
+$("#skip").addEventListener("click",()=>endRound(false));
 build().catch(e=>fail(e.message));
 </script>
 </body>

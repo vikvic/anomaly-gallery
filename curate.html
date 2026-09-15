@@ -80,13 +80,32 @@ function faceMetrics(f,W,H){
   for(const p of f){x0=Math.min(x0,p.x);x1=Math.max(x1,p.x);y0=Math.min(y0,p.y);y1=Math.max(y1,p.y);}
   return {w:(x1-x0)*W,h:(y1-y0)*H,cx:(x0+x1)/2*W,cy:(y0+y1)/2*H};
 }
-function findBlob(ctx,W,H,pred,box){
+function findBlob(ctx,W,H,pred,box,close=5){
   const {x0,y0,x1,y1}=box;
   const d=ctx.getImageData(0,0,W,H).data;
-  const m=new Float32Array(W*H);
+  let bin=new Float32Array(W*H);
   for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){
-    const k=(y*W+x)*4; m[y*W+x]=pred(d[k],d[k+1],d[k+2])?Infinity:0;
+    const k=(y*W+x)*4; bin[y*W+x]=pred(d[k],d[k+1],d[k+2])?1:0;
   }
+  /* Morphological closing (separable box blur, re-thresholded). The predicate
+     rejects specular highlights and shadowed sides, which fragments a single
+     apple into slivers and makes the inscribed radius about half the truth
+     (r=11 for fruit that is really r=21). Must match the game's findBlobs,
+     or curated targets ship undersized and grafts spill over object edges. */
+  if(close>0){
+    const tmp=new Float32Array(W*H), out=new Float32Array(W*H), win=close*2+1;
+    for(let y=y0;y<y1;y++){ let s=0;
+      for(let x=x0;x<x1;x++){ s+=bin[y*W+x];
+        if(x-x0>=win) s-=bin[y*W+x-win];
+        tmp[y*W+Math.max(x0,x-close)]=s/win; } }
+    for(let x=x0;x<x1;x++){ let s=0;
+      for(let y=y0;y<y1;y++){ s+=tmp[y*W+x];
+        if(y-y0>=win) s-=tmp[(y-win)*W+x];
+        out[Math.max(y0,y-close)*W+x]=s/win; } }
+    for(let i=0;i<W*H;i++) bin[i]=out[i]>0.42?1:0;
+  }
+  const m=new Float32Array(W*H);
+  for(let i=0;i<W*H;i++) m[i]=bin[i]?Infinity:0;
   for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){
     const i=y*W+x;if(m[i]===0)continue;
     let v=m[i];
