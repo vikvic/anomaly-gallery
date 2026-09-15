@@ -1,0 +1,14 @@
+# Normalise line endings to LF inside the repo.
+#
+# This matters more than it looks: .github/workflows/deploy.yml contains
+# `run: |` blocks that execute as bash on ubuntu runners. If the file is
+# committed with CRLF (easy to do from Windows), bash sees `set -e\r` and the
+# workflow fails with confusing errors. Storing LF prevents that.
+* text=auto eol=lf
+
+# Keep binaries byte-exact
+*.jpg  binary
+*.jpeg binary
+*.png  binary
+*.webp binary
+*.ico  binary

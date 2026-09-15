@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Asset Curator</title>
+<style>
+  :root{--bg:#131110;--panel:#1c1917;--ink:#ddd3c4;--dim:#8a7f6e;--line:#2e2822;
+        --good:#7fa368;--bad:#b8352c;--warn:#c98a3f}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);padding:20px 16px 60px;
+       font:14px/1.5 "Iowan Old Style",Palatino,Georgia,serif}
+  .wrap{max-width:1280px;margin:0 auto}
+  h1{font-size:21px;letter-spacing:.12em;text-transform:uppercase;font-weight:400;margin:0 0 4px}
+  .sub{color:var(--dim);font-style:italic;margin:0 0 16px;max-width:80ch}
+  .bar{position:sticky;top:0;z-index:10;background:rgba(12,10,8,.95);backdrop-filter:blur(6px);
+       border:1px solid var(--line);border-radius:3px;padding:10px 14px;margin:0 0 18px;
+       display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+  button{background:#241d16;color:var(--ink);border:1px solid #4a3d2c;padding:8px 14px;
+       font:inherit;font-size:13px;cursor:pointer;border-radius:2px}
+  button:hover:not(:disabled){background:#33281d}
+  button:disabled{opacity:.4;cursor:default}
+  button.primary{border-color:#6b5836;background:#33281d}
+  .stat{font:12px ui-monospace,Menlo,Consolas,monospace;color:var(--dim)}
+  .stat b{color:var(--good);font-weight:400}
+  .stat i{color:var(--bad);font-style:normal}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:6px;
+        cursor:pointer;position:relative}
+  .card.out{opacity:.34}
+  .card.out::after{content:"excluded";position:absolute;top:50%;left:0;right:0;text-align:center;
+        font:11px ui-monospace,monospace;color:var(--bad);letter-spacing:.1em}
+  .card canvas{display:block;width:100%;height:auto;background:#0a0908}
+  .meta{font:10px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--dim);padding-top:5px;
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .meta .ok{color:var(--good)} .meta .no{color:var(--bad)} .meta .wa{color:var(--warn)}
+  .msg{color:var(--dim);font-style:italic}
+  .note{color:#6d6455;font-size:12px;line-height:1.7;border-top:1px solid var(--line);
+        padding-top:14px;margin-top:24px;max-width:84ch}
+  code{color:#9a8c73}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Asset Curator</h1>
+  <p class="sub">Runs face detection and blob targeting over every downloaded painting, marks which ops each one can actually support, and writes the result back into the manifest. Click any card to include or exclude it by hand.</p>
+
+  <div class="bar">
+    <button id="analyse" class="primary">Analyse all</button>
+    <button id="autodrop">Drop unusable</button>
+    <button id="export" disabled>Export manifest.json</button>
+    <span class="stat" id="stat">load assets/manifest.json to begin</span>
+  </div>
+
+  <div class="grid" id="grid"></div>
+
+  <p class="note">
+    Green outline = face detected (supports <code>rictus</code>, <code>drift</code>,
+    <code>elongate</code>, and can donate an eye or mouth). Amber circle = blob target found
+    (supports <code>graft</code>). A painting with neither is dead weight — drop it.<br><br>
+    Export writes <code>usable</code>, <code>hasFace</code> and normalised <code>blob</code>
+    coordinates into each entry, so the game never runs a distance transform at load time and
+    never picks a painting whose detection fails.
+  </p>
+</div>
+
+<script type="module">
+import {FilesetResolver,FaceLandmarker}
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const $=s=>document.querySelector(s);
+const rgb2hsl=(r,g,b)=>{r/=255;g/=255;b/=255;
+  const mx=Math.max(r,g,b),mn=Math.min(r,g,b),l=(mx+mn)/2,d=mx-mn;let h=0,s=0;
+  if(d){s=l>0.5?d/(2-mx-mn):d/(mx+mn);
+    if(mx===r)h=((g-b)/d+(g<b?6:0));else if(mx===g)h=((b-r)/d+2);else h=((r-g)/d+4);h*=60;}
+  return [h,s,l];};
+
+function faceMetrics(f,W,H){
+  let x0=1,y0=1,x1=0,y1=0;
+  for(const p of f){x0=Math.min(x0,p.x);x1=Math.max(x1,p.x);y0=Math.min(y0,p.y);y1=Math.max(y1,p.y);}
+  return {w:(x1-x0)*W,h:(y1-y0)*H,cx:(x0+x1)/2*W,cy:(y0+y1)/2*H};
+}
+function findBlob(ctx,W,H,pred,box){
+  const {x0,y0,x1,y1}=box;
+  const d=ctx.getImageData(0,0,W,H).data;
+  const m=new Float32Array(W*H);
+  for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){
+    const k=(y*W+x)*4; m[y*W+x]=pred(d[k],d[k+1],d[k+2])?Infinity:0;
+  }
+  for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){
+    const i=y*W+x;if(m[i]===0)continue;
+    let v=m[i];
+    if(x>x0)v=Math.min(v,m[i-1]+1);
+    if(y>y0)v=Math.min(v,m[i-W]+1);
+    if(x>x0&&y>y0)v=Math.min(v,m[i-W-1]+1.414);
+    if(x<x1-1&&y>y0)v=Math.min(v,m[i-W+1]+1.414);
+    m[i]=v;
+  }
+  let bi=-1,bv=0;
+  for(let y=y1-1;y>=y0;y--)for(let x=x1-1;x>=x0;x--){
+    const i=y*W+x;if(m[i]===0)continue;
+    let v=m[i];
+    if(x<x1-1)v=Math.min(v,m[i+1]+1);
+    if(y<y1-1)v=Math.min(v,m[i+W]+1);
+    if(x<x1-1&&y<y1-1)v=Math.min(v,m[i+W+1]+1.414);
+    if(x>x0&&y<y1-1)v=Math.min(v,m[i+W-1]+1.414);
+    m[i]=v;
+    if(v>bv){bv=v;bi=i;}
+  }
+  if(bi<0||bv<9) return null;                     // too small to graft onto
+  const b={x:bi%W,y:(bi/W)|0,r:Math.round(bv)};
+  const clear=Math.max(6,b.r*0.8);
+  if(b.x-clear<x0||b.x+clear>x1||b.y-clear<y0||b.y+clear>y1) return null;  // edge-hugging
+  return b;
+}
+const warmMass=(r,g,b)=>{const [h,s,l]=rgb2hsl(r,g,b);
+  return (h<44||h>330)&&s>0.38&&l>0.18&&l<0.78;};
+const anyMass=(r,g,b)=>{const [h,s,l]=rgb2hsl(r,g,b);
+  return s>0.22&&l>0.16&&l<0.82;};
+
+const W=470;
+let MAN=null, FL=null, CARDS=[];
+
+async function loadManifest(){
+  const res=await fetch("../assets/manifest.json").catch(()=>null)
+        || await fetch("assets/manifest.json");
+  if(!res || !res.ok) throw new Error("assets/manifest.json not found — run tools/fetch-assets.mjs first, and serve this page over http (not file://)");
+  return res.json();
+}
+const assetURL=f=>{
+  // works whether curate.html sits in tools/ or at the repo root
+  return location.pathname.includes("/tools/") ? "../assets/"+f : "assets/"+f;
+};
+const loadImg=u=>new Promise((res,rej)=>{
+  const i=new Image();i.onload=()=>res(i);i.onerror=()=>rej(new Error("load "+u));i.src=u;});
+
+function draw(){
+  const grid=$("#grid"); grid.innerHTML=""; CARDS=[];
+  MAN.items.forEach((it,i)=>{
+    const card=document.createElement("div");
+    card.className="card"+(it.usable===false?" out":"");
+    const c=document.createElement("canvas"); c.width=160; c.height=120;
+    const meta=document.createElement("div"); meta.className="meta";
+    meta.textContent=it.artist.split(" ").slice(-1)[0]+" · "+it.kind;
+    card.append(c,meta);
+    card.onclick=()=>{ it.usable=!(it.usable!==false); card.className="card"+(it.usable===false?" out":""); stats(); };
+    grid.appendChild(card);
+    CARDS.push({card,canvas:c,meta,item:it});
+  });
+  stats();
+}
+function stats(){
+  const n=MAN.items.length;
+  const kept=MAN.items.filter(i=>i.usable!==false).length;
+  const f=MAN.items.filter(i=>i.usable!==false&&i.hasFace).length;
+  const b=MAN.items.filter(i=>i.usable!==false&&i.blob).length;
+  $("#stat").innerHTML=`${n} downloaded · <b>${kept}</b> kept · ${f} with face · ${b} with graft target · <i>${n-kept}</i> excluded`;
+}
+
+async function analyse(){
+  $("#analyse").disabled=true; $("#autodrop").disabled=true;
+  $("#stat").textContent="loading landmarker…";
+  if(!FL){
+    const fs=await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    FL=await FaceLandmarker.createFromOptions(fs,{
+      baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"},
+      runningMode:"IMAGE",numFaces:1});
+  }
+  let done=0;
+  for(const {canvas,meta,item} of CARDS){
+    let img;
+    try{ img=await loadImg(assetURL(item.file)); }
+    catch(e){ item.usable=false; meta.innerHTML='<span class="no">missing file</span>'; done++; continue; }
+    const H=Math.round(img.height*(W/img.width));
+    const work=document.createElement("canvas"); work.width=W; work.height=H;
+    const ctx=work.getContext("2d",{willReadFrequently:true});
+    ctx.drawImage(img,0,0,W,H);
+
+    const res=FL.detect(work);
+    const face=res.faceLandmarks?.[0]||null;
+    item.hasFace=!!face;
+
+    let box={x0:Math.round(W*0.16),y0:Math.round(H*0.30),
+             x1:Math.round(W*0.84),y1:Math.round(H*0.88)};
+    if(face){
+      const m=faceMetrics(face,W,H);
+      box.y0=Math.max(box.y0,Math.round(m.cy+m.h*0.55));
+      if(box.y1-box.y0<50) box={x0:Math.round(W*0.16),y0:Math.round(H*0.55),
+                                x1:Math.round(W*0.84),y1:Math.round(H*0.90)};
+    }
+    const blob=findBlob(ctx,W,H,warmMass,box)||findBlob(ctx,W,H,anyMass,box);
+    // store normalised so it survives any future resize
+    item.blob=blob?{x:+(blob.x/W).toFixed(4),y:+(blob.y/H).toFixed(4),r:+(blob.r/W).toFixed(4)}:null;
+    item.aspect=+(H/W).toFixed(4);
+    if(item.usable===undefined) item.usable=!!(face||blob);
+
+    // thumbnail with overlays
+    canvas.width=160; canvas.height=Math.round(160*H/W);
+    const g=canvas.getContext("2d"); g.imageSmoothingQuality="high";
+    g.drawImage(work,0,0,canvas.width,canvas.height);
+    const K=canvas.width/W;
+    if(face){
+      const m=faceMetrics(face,W,H);
+      g.strokeStyle="rgba(127,163,104,.9)"; g.lineWidth=1.5;
+      g.strokeRect((m.cx-m.w/2)*K,(m.cy-m.h/2)*K,m.w*K,m.h*K);
+    }
+    if(blob){
+      g.strokeStyle="rgba(201,138,63,.95)"; g.lineWidth=1.5;
+      g.beginPath(); g.arc(blob.x*K,blob.y*K,Math.max(3,blob.r*K),0,Math.PI*2); g.stroke();
+    }
+    meta.innerHTML=
+      `<span class="${face?"ok":"no"}">${face?"face":"—"}</span> · `
+    + `<span class="${blob?"wa":"no"}">${blob?"blob r"+blob.r:"—"}</span> · ${item.kind}`;
+    if(item.usable===false) CARDS.find(c=>c.item===item).card.className="card out";
+    done++;
+    if(done%6===0){ $("#stat").textContent=`analysing ${done}/${CARDS.length}…`; await new Promise(r=>setTimeout(r)); }
+  }
+  $("#analyse").disabled=false; $("#autodrop").disabled=false; $("#export").disabled=false;
+  stats();
+}
+
+$("#analyse").onclick=()=>analyse().catch(e=>{$("#stat").textContent=e.message;});
+$("#autodrop").onclick=()=>{
+  for(const {item,card} of CARDS){
+    item.usable=!!(item.hasFace||item.blob);
+    card.className="card"+(item.usable?"":" out");
+  }
+  stats();
+};
+$("#export").onclick=()=>{
+  const out={...MAN, curated:new Date().toISOString(),
+             items:MAN.items.filter(i=>i.usable!==false).map(({usable,...rest})=>rest)};
+  const blob=new Blob([JSON.stringify(out,null,2)],{type:"application/json"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download="manifest.json"; a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+loadManifest().then(m=>{MAN=m;draw();$("#stat").textContent=`${m.items.length} loaded — press Analyse all`;})
+  .catch(e=>{$("#stat").textContent=e.message;});
+</script>
+</body>
+</html>

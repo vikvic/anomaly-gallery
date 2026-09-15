@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Anomaly Gallery</title>
+<style>
+  :root{
+    --wall:#17130f; --wall2:#0a0807; --frame:#6b5836; --frame2:#3a2f1d;
+    --ink:#ddd2c0; --dim:#8d8170; --red:#b8352c; --green:#7fa368; --amber:#c98a3f;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;color:var(--ink);
+       background:radial-gradient(130% 95% at 50% 4%,var(--wall),var(--wall2));
+       font:15px/1.5 "Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+       padding:18px 16px 60px}
+  .wrap{max-width:1240px;margin:0 auto}
+  header{text-align:center;margin-bottom:14px}
+  h1{font-size:23px;letter-spacing:.16em;text-transform:uppercase;font-weight:400;margin:0 0 3px}
+  .tag{color:var(--dim);font-style:italic;font-size:13px;margin:0}
+
+  /* ---- HUD ---- */
+  .hud{position:sticky;top:0;z-index:20;margin:0 0 16px;padding:10px 14px;
+       background:rgba(12,10,8,.93);border:1px solid #2c251d;border-radius:3px;
+       backdrop-filter:blur(6px);display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+  .clock{font:22px/1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.06em;min-width:74px}
+  .clock.warn{color:var(--amber)} .clock.crit{color:var(--red)}
+  .found{font:13px ui-monospace,Menlo,Consolas,monospace;color:var(--dim)}
+  .found b{color:var(--green);font-weight:400}
+  .barwrap{flex:1 1 180px;height:5px;background:#2a231b;border-radius:3px;overflow:hidden;min-width:120px}
+  .bar{height:100%;width:100%;background:linear-gradient(90deg,var(--green),var(--amber));
+       transition:width .1s linear}
+  .bar.crit{background:var(--red)}
+  button{background:#241d16;color:var(--ink);border:1px solid #4a3d2c;padding:8px 15px;
+       font:inherit;font-size:13px;cursor:pointer;border-radius:2px}
+  button:hover:not(:disabled){background:#33281d}
+  button:disabled{opacity:.4;cursor:default}
+  .say{color:var(--dim);font-style:italic;font-size:13px;flex:1 1 100%;min-height:19px}
+  .say.good{color:var(--green);font-style:normal}
+  .say.bad{color:var(--red);font-style:normal}
+
+  /* ---- gallery ---- */
+  .gal{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:22px}
+  .plate{position:relative}
+  .mount{background:linear-gradient(158deg,var(--frame),var(--frame2));padding:10px;border-radius:2px;
+       box-shadow:0 16px 36px rgba(0,0,0,.75),inset 0 0 0 1px rgba(255,255,255,.07)}
+  .mat{background:#080706;padding:6px;position:relative;overflow:hidden}
+  canvas{display:block;width:100%;height:auto;cursor:crosshair}
+  .mat::after{content:"";position:absolute;inset:6px;pointer-events:none;
+       background:radial-gradient(82% 68% at 50% 40%,transparent 46%,rgba(0,0,0,.5))}
+  .cap{margin-top:8px;font-size:11px;color:#b3a184;letter-spacing:.05em;line-height:1.35}
+  .cap b{display:block;font-weight:400;color:#d6c6a4}
+  .cap i{color:#87775e}
+  .lock canvas{cursor:default}
+
+  /* ---- overlays ---- */
+  .veil{position:fixed;inset:0;z-index:40;display:none;place-items:center;
+        background:rgba(6,5,4,.88);backdrop-filter:blur(3px);padding:20px}
+  .veil.on{display:grid}
+  .card{max-width:440px;text-align:center;border:1px solid #372d22;border-radius:4px;
+        background:#15110d;padding:26px 28px}
+  .card h2{margin:0 0 8px;font-size:19px;font-weight:400;letter-spacing:.1em;text-transform:uppercase}
+  .card p{margin:0 0 16px;color:var(--dim);font-size:13.5px;line-height:1.65}
+  .card .score{font:30px/1 ui-monospace,monospace;color:var(--green);margin:0 0 4px}
+  .card .score.bad{color:var(--red)}
+  .boot{text-align:center;color:var(--dim);font-style:italic;padding:60px 20px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Anomaly Gallery</h1>
+    <p class="tag">Five works. Five things that should not be there. Two minutes.</p>
+  </header>
+
+  <div class="hud">
+    <div class="clock" id="clock">2:00</div>
+    <div class="barwrap"><div class="bar" id="bar"></div></div>
+    <div class="found">found <b id="nfound">0</b> / <span id="ntotal">5</span></div>
+    <button id="again">New gallery</button>
+    <div class="say" id="say">Look closely. Click anything that is wrong.</div>
+  </div>
+
+  <div class="gal" id="gal"><div class="boot">Unlocking the wing…</div></div>
+</div>
+
+<div class="veil" id="veil"><div class="card" id="card"></div></div>
+
+<script type="module">
+import {FilesetResolver,FaceLandmarker}
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const $=s=>document.querySelector(s);
+
+/* ========================= colour ========================= */
+const rgb2hsl=(r,g,b)=>{r/=255;g/=255;b/=255;
+  const mx=Math.max(r,g,b),mn=Math.min(r,g,b),l=(mx+mn)/2,d=mx-mn;let h=0,s=0;
+  if(d){s=l>0.5?d/(2-mx-mn):d/(mx+mn);
+    if(mx===r)h=((g-b)/d+(g<b?6:0));else if(mx===g)h=((b-r)/d+2);else h=((r-g)/d+4);h*=60;}
+  return [h,s,l];};
+const hsl2rgb=(h,s,l)=>{h=((h%360)+360)%360;
+  const c=(1-Math.abs(2*l-1))*s,x=c*(1-Math.abs((h/60)%2-1)),m=l-c/2;let r,g,b;
+  if(h<60){r=c;g=x;b=0}else if(h<120){r=x;g=c;b=0}else if(h<180){r=0;g=c;b=x}
+  else if(h<240){r=0;g=x;b=c}else if(h<300){r=x;g=0;b=c}else{r=c;g=0;b=x}
+  return [(r+m)*255,(g+m)*255,(b+m)*255];};
+
+/* ========================= landmark rings ========================= */
+const RING={
+  eyeR:[33,7,163,144,145,153,154,155,133,173,157,158,159,160,161,246],
+  eyeL:[362,382,381,380,374,373,390,249,263,466,388,387,386,385,384,398],
+  mouth:[61,146,91,181,84,17,314,405,321,375,291,409,270,269,267,0,37,39,40,185]
+};
+const L={mouthR:61,mouthL:291,chin:152,irisL:473,irisR:468};
+const pt=(f,i,W,H)=>({x:f[i].x*W,y:f[i].y*H});
+function faceMetrics(f,W,H){
+  let x0=1,y0=1,x1=0,y1=0;
+  for(const p of f){x0=Math.min(x0,p.x);x1=Math.max(x1,p.x);y0=Math.min(y0,p.y);y1=Math.max(y1,p.y);}
+  return {w:(x1-x0)*W,h:(y1-y0)*H,cx:(x0+x1)/2*W,cy:(y0+y1)/2*H};
+}
+
+/* ========================= harvest a body part ========================= */
+function harvestFeature(srcCanvas,f,ringName,opt={}){
+  const {expand=1.8,feather=0.32,tall=1.25}=opt;
+  const W=srcCanvas.width,H=srcCanvas.height;
+  const ring=RING[ringName].map(i=>({x:f[i].x*W,y:f[i].y*H}));
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9,cx=0,cy=0;
+  for(const p of ring){x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);
+    x1=Math.max(x1,p.x);y1=Math.max(y1,p.y);cx+=p.x;cy+=p.y;}
+  cx/=ring.length;cy/=ring.length;
+  const bw=(x1-x0)*expand, bh=(y1-y0)*expand*tall;
+  if(bw<8||bh<6) return null;
+  const c=document.createElement("canvas");
+  c.width=Math.round(bw);c.height=Math.round(bh);
+  const x=c.getContext("2d",{willReadFrequently:true});
+  x.drawImage(srcCanvas,cx-bw/2,cy-bh/2,bw,bh,0,0,c.width,c.height);
+  const im=x.getImageData(0,0,c.width,c.height),d=im.data;
+  const rx=c.width/2,ry=c.height/2;
+  for(let py=0;py<c.height;py++)for(let px=0;px<c.width;px++){
+    const nx=(px-rx)/rx,ny=(py-ry)/ry,dd=Math.hypot(nx,ny);
+    let a=1-Math.max(0,Math.min(1,(dd-(1-feather))/feather));
+    a=a*a*(3-2*a);
+    d[(py*c.width+px)*4+3]=a*255;
+  }
+  x.putImageData(im,0,0);
+  return {canvas:c,w:c.width,h:c.height,kind:ringName};
+}
+
+/* ========================= graft a part onto a surface ========================= */
+function graftFeature(ctx,W,H,part,target,opt={}){
+  const {sizeRel=2.0,rot=0.05,bulge=0.42,shadeAmt=0.45,gradeAmt=0.10,
+         crease=0.55,satKeep=1.35,alpha=0.97}=opt;
+  const pre=document.createElement("canvas");
+  pre.width=part.w;pre.height=part.h;
+  const pc=pre.getContext("2d",{willReadFrequently:true});
+  pc.drawImage(part.canvas,0,0);
+  {const im=pc.getImageData(0,0,part.w,part.h),d=im.data;
+   for(let i=0;i<d.length;i+=4){if(d[i+3]<4)continue;
+     const [h,s,l]=rgb2hsl(d[i],d[i+1],d[i+2]);
+     const [r,g,b]=hsl2rgb(h,Math.min(1,s*satKeep),l);
+     d[i]=r;d[i+1]=g;d[i+2]=b;}
+   pc.putImageData(im,0,0);}
+  const ew=Math.max(12,Math.round(target.r*2*sizeRel));
+  const eh=Math.max(8,Math.round(ew*(part.h/part.w)));
+  const off=document.createElement("canvas");off.width=ew;off.height=eh;
+  const ox=off.getContext("2d",{willReadFrequently:true});
+  ox.drawImage(pre,0,0,ew,eh);
+  if(bulge>0){
+    const src=ox.getImageData(0,0,ew,eh),s=src.data;
+    const out=ox.createImageData(ew,eh),o=out.data;
+    const cx=ew/2,cy=eh/2;
+    for(let y=0;y<eh;y++)for(let x=0;x<ew;x++){
+      const nx=(x-cx)/cx,ny=(y-cy)/cy,r=Math.hypot(nx,ny);
+      const k=r<1?1-bulge*(1-Math.sqrt(1-Math.min(1,r*r))):1;
+      const fx=Math.max(0,Math.min(ew-1.001,cx+nx*cx*k));
+      const fy=Math.max(0,Math.min(eh-1.001,cy+ny*cy*k));
+      const x0=fx|0,y0=fy|0,ax=fx-x0,ay=fy-y0,di=(y*ew+x)*4;
+      const x1=Math.min(ew-1,x0+1),y1=Math.min(eh-1,y0+1);
+      for(let c=0;c<4;c++){
+        const i00=(y0*ew+x0)*4+c,i10=(y0*ew+x1)*4+c,i01=(y1*ew+x0)*4+c,i11=(y1*ew+x1)*4+c;
+        o[di+c]=(s[i00]*(1-ax)+s[i10]*ax)*(1-ay)+(s[i01]*(1-ax)+s[i11]*ax)*ay;
+      }
+    }
+    ox.putImageData(out,0,0);
+  }
+  const px=Math.round(target.x-ew/2),py=Math.round(target.y-eh/2);
+  const hx=Math.max(0,Math.min(W-ew,px)),hy=Math.max(0,Math.min(H-eh,py));
+  const host=ctx.getImageData(hx,hy,ew,eh).data;
+  let hm=0,hr=0,hg=0,hb=0,n=0;
+  for(let i=0;i<host.length;i+=4){
+    hm+=host[i]*0.299+host[i+1]*0.587+host[i+2]*0.114;
+    hr+=host[i];hg+=host[i+1];hb+=host[i+2];n++;}
+  hm/=n;hr/=n;hg/=n;hb/=n;
+  const im=ox.getImageData(0,0,ew,eh),d=im.data;
+  const cx2=ew/2,cy2=eh/2;
+  for(let y=0;y<eh;y++)for(let x=0;x<ew;x++){
+    const i=(y*ew+x)*4;if(d[i+3]<4)continue;
+    const hl=host[i]*0.299+host[i+1]*0.587+host[i+2]*0.114;
+    const shade=1+((hl/Math.max(1,hm))-1)*shadeAmt;
+    const tg=[hr,hg,hb];
+    for(let c=0;c<3;c++){
+      let v=d[i+c]*shade;
+      v=v+(tg[c]-v)*gradeAmt*0.35;
+      d[i+c]=Math.max(0,Math.min(255,v));
+    }
+    const nx=(x-cx2)/cx2,ny=(y-cy2)/cy2,rr=Math.hypot(nx,ny);
+    if(rr>0.55){const k=Math.min(1,(rr-0.55)/0.45)*crease;
+      for(let c=0;c<3;c++)d[i+c]*=(1-k*0.55);}
+  }
+  ox.putImageData(im,0,0);
+  ctx.save();ctx.globalAlpha=alpha;
+  ctx.translate(target.x,target.y);ctx.rotate(rot);
+  ctx.drawImage(off,-ew/2,-eh/2);ctx.restore();
+  return [target.x-ew/2,target.y-eh/2,ew,eh];
+}
+
+/* ========================= liquify (face warps) ========================= */
+function liquify(ctx,W,H,handles){
+  const src=ctx.getImageData(0,0,W,H),s=src.data;
+  const out=ctx.createImageData(W,H),o=out.data;
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    let ox=0,oy=0;
+    for(const h of handles){
+      const dx=x-h.x,dy=y-h.y,d=Math.hypot(dx,dy);
+      if(d>=h.r)continue;
+      let t=1-d/h.r;t=t*t*(3-2*t);
+      ox+=h.dx*t;oy+=h.dy*t;
+    }
+    let fx=Math.max(0,Math.min(W-1.001,x-ox)),fy=Math.max(0,Math.min(H-1.001,y-oy));
+    const x0=fx|0,y0=fy|0,ax=fx-x0,ay=fy-y0,di=(y*W+x)*4;
+    const x1=Math.min(W-1,x0+1),y1=Math.min(H-1,y0+1);
+    for(let c=0;c<3;c++){
+      const i00=(y0*W+x0)*4+c,i10=(y0*W+x1)*4+c,i01=(y1*W+x0)*4+c,i11=(y1*W+x1)*4+c;
+      o[di+c]=(s[i00]*(1-ax)+s[i10]*ax)*(1-ay)+(s[i01]*(1-ax)+s[i11]*ax)*ay;
+    }
+    o[di+3]=255;
+  }
+  ctx.putImageData(out,0,0);
+}
+function opRictus(ctx,W,H,f,k=1){
+  const m=faceMetrics(f,W,H),a=pt(f,L.mouthR,W,H),b=pt(f,L.mouthL,W,H);
+  const sp=m.w*0.075*k,lift=m.h*0.035*k,r=m.w*0.30;
+  liquify(ctx,W,H,[{x:a.x,y:a.y,dx:-sp,dy:-lift,r},{x:b.x,y:b.y,dx:sp,dy:-lift,r}]);
+  const x0=Math.min(a.x,b.x)-r*0.6,y0=Math.min(a.y,b.y)-r*0.55;
+  return [x0,y0,Math.abs(b.x-a.x)+r*1.2,r*1.1];
+}
+function opDrift(ctx,W,H,f,k=1){
+  const m=faceMetrics(f,W,H),e=pt(f,L.irisL,W,H),r=m.w*0.22;
+  liquify(ctx,W,H,[{x:e.x,y:e.y,dx:m.w*0.024*k,dy:m.h*0.030*k,r}]);
+  return [e.x-r*0.75,e.y-r*0.75,r*1.5,r*1.5];
+}
+function opElongate(ctx,W,H,f,k=1){
+  const m=faceMetrics(f,W,H),c=pt(f,L.chin,W,H),r=m.h*0.34;
+  liquify(ctx,W,H,[{x:c.x,y:c.y,dx:0,dy:m.h*0.075*k,r}]);
+  return [c.x-r*0.7,c.y-r*0.7,r*1.4,r*1.4];
+}
+
+/* ========================= target finding ========================= */
+function findBlob(ctx,W,H,pred,box={}){
+  const {x0=0,y0=0,x1=W,y1=H}=box;
+  const d=ctx.getImageData(0,0,W,H).data;
+  const m=new Float32Array(W*H);
+  for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){
+    const k=(y*W+x)*4;
+    m[y*W+x]=pred(d[k],d[k+1],d[k+2])?Infinity:0;
+  }
+  for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){
+    const i=y*W+x;if(m[i]===0)continue;
+    let v=m[i];
+    if(x>x0)v=Math.min(v,m[i-1]+1);
+    if(y>y0)v=Math.min(v,m[i-W]+1);
+    if(x>x0&&y>y0)v=Math.min(v,m[i-W-1]+1.414);
+    if(x<x1-1&&y>y0)v=Math.min(v,m[i-W+1]+1.414);
+    m[i]=v;
+  }
+  let bi=-1,bv=0;
+  for(let y=y1-1;y>=y0;y--)for(let x=x1-1;x>=x0;x--){
+    const i=y*W+x;if(m[i]===0)continue;
+    let v=m[i];
+    if(x<x1-1)v=Math.min(v,m[i+1]+1);
+    if(y<y1-1)v=Math.min(v,m[i+W]+1);
+    if(x<x1-1&&y<y1-1)v=Math.min(v,m[i+W+1]+1.414);
+    if(x>x0&&y<y1-1)v=Math.min(v,m[i+W-1]+1.414);
+    m[i]=v;
+    if(v>bv){bv=v;bi=i;}
+  }
+  return bi<0||bv<7?null:{x:bi%W,y:(bi/W)|0,r:Math.round(bv)};
+}
+const warmMass=(r,g,b)=>{const [h,s,l]=rgb2hsl(r,g,b);
+  return (h<44||h>330)&&s>0.38&&l>0.18&&l<0.78;};
+const anyMass=(r,g,b)=>{const [h,s,l]=rgb2hsl(r,g,b);
+  return s>0.22&&l>0.16&&l<0.82;};
+/* Reject blobs hugging the edge of the search window — a graft that runs off
+   the canvas reads as a bug, not an anomaly. */
+function validBlob(b,box){
+  if(!b) return null;
+  const clear=Math.max(6,b.r*0.8);
+  if(b.x-clear<box.x0||b.x+clear>box.x1||b.y-clear<box.y0||b.y+clear>box.y1) return null;
+  return b;
+}
+/* Grafts must be big enough to be findable but not so big they look pasted.
+   Clamp the drawn size to an absolute band regardless of blob radius. */
+function graftSize(blobR,minPx,maxPx){
+  const want=blobR*2*2.0;
+  return Math.max(minPx,Math.min(maxPx,want))/(blobR*2);
+}
+
+/* ========================= sources ========================= */
+const API="https://commons.wikimedia.org/w/api.php";
+const POOL=[
+  {t:"File:Basket of Fruit-Caravaggio (c.1595).jpg",  n:"Basket of Fruit",             a:"Caravaggio",      y:"c.1595", kind:"still"},
+  {t:"File:Floris van Dyck - Still-Life with Fruit, Nuts and Cheese - WGA06346.jpg", n:"Still-Life with Fruit, Nuts and Cheese", a:"Floris van Dyck", y:"1613", kind:"still"},
+  {t:"File:Abraham van Beyeren - Still life with Fruit and Vessels.jpg", n:"Still Life with Fruit and Vessels", a:"Abraham van Beyeren", y:"", kind:"still"},
+  {t:"File:Willem Kalf - Still Life with a Nautilus Cup.jpg", n:"Still Life with a Nautilus Cup", a:"Willem Kalf", y:"1662", kind:"still"},
+  {t:"File:Caravaggio - Boy with a Basket of Fruit.jpg", n:"Boy with a Basket of Fruit", a:"Caravaggio", y:"c.1593", kind:"both"},
+  {t:"File:Rembrandt self portrait.jpg",              n:"Self-Portrait",               a:"Rembrandt",       y:"",       kind:"face"},
+  {t:"File:Raffaello Sanzio.jpg",                     n:"Self-Portrait",               a:"Raphael",         y:"c.1506", kind:"face"},
+  {t:"File:Raffaello - ElisabettaGonzaga.jpg",        n:"Elisabetta Gonzaga",          a:"Raphael",         y:"c.1504", kind:"face"},
+  {t:"File:Girl with a Pearl Earring.jpg",            n:"Girl with a Pearl Earring",   a:"Johannes Vermeer",y:"c.1665", kind:"face"},
+  {t:"File:Vermeer-Portrait of a Young Woman.jpg",    n:"Portrait of a Young Woman",   a:"Johannes Vermeer",y:"c.1667", kind:"face"},
+  {t:"File:Mona Lisa, by Leonardo da Vinci, from C2RMF retouched.jpg", n:"Mona Lisa",  a:"Leonardo da Vinci",y:"c.1503",kind:"face"},
+  {t:"File:Lady with an Ermine - Leonardo da Vinci (adjusted levels).jpg", n:"Lady with an Ermine", a:"Leonardo da Vinci", y:"c.1490", kind:"face"}
+];
+
+const loadImg=u=>new Promise((res,rej)=>{
+  const i=new Image();i.crossOrigin="anonymous";
+  i.onload=()=>res(i);i.onerror=()=>rej(new Error("load failed"));i.src=u;});
+
+/* Local asset manifest, produced by tools/fetch-assets.mjs and enriched by
+   tools/curate.html. Falling back to the live Commons API is only for running
+   this file standalone — Commons rate-limits hard and will fail under any real
+   traffic, so a shipped build must have assets/manifest.json present. */
+let MANIFEST=null;
+async function getManifest(){
+  if(MANIFEST!==null) return MANIFEST;
+  try{
+    const r=await fetch("assets/manifest.json",{cache:"no-cache"});
+    if(!r.ok) throw new Error("no manifest");
+    const m=await r.json();
+    if(!m.items||!m.items.length) throw new Error("empty manifest");
+    MANIFEST=m;
+  }catch(e){ MANIFEST=false; }
+  return MANIFEST;
+}
+async function resolveAll(titles){
+  const u=`${API}?action=query&format=json&origin=*&prop=imageinfo&iiprop=url`
+        + `&iiurlwidth=1000&titles=${encodeURIComponent(titles.join("|"))}`;
+  const res=await fetch(u);const txt=await res.text();
+  if(!txt.trim().startsWith("{")) throw new Error("Commons is rate-limiting. Wait a few seconds and press New gallery.");
+  const j=JSON.parse(txt);
+  const map={};
+  for(const p of Object.values(j.query.pages)){
+    if(p.imageinfo) map[p.title]=p.imageinfo[0].thumburl;
+  }
+  for(const nm of (j.query.normalized||[])) if(map[nm.to]) map[nm.from]=map[nm.to];
+  return map;
+}
+
+/* ========================= game ========================= */
+const DUR=120000, PENALTY=3000, DISPW=470;
+let STATE=null, TICK=null;
+
+const shuffle=a=>{for(let i=a.length-1;i>0;i--){const j=(Math.random()*(i+1))|0;[a[i],a[j]]=[a[j],a[i]];}return a;};
+
+let FL=null;
+async function landmarker(){
+  if(FL) return FL;
+  const fs=await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  FL=await FaceLandmarker.createFromOptions(fs,{
+    baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"},
+    runningMode:"IMAGE",numFaces:1});
+  return FL;
+}
+
+async function build(){
+  clearInterval(TICK);
+  $("#veil").classList.remove("on");
+  $("#gal").innerHTML='<div class="boot">Unlocking the wing…</div>';
+  $("#again").disabled=true;
+  $("#say").className="say"; $("#say").textContent="Hanging the collection…";
+
+  const fl=await landmarker();
+
+  // choose 5: three with faces, two still lifes, so both op families can fire
+  const man=await getManifest();
+  let chosen, urls;
+  if(man){
+    // curated local assets: selection is guaranteed-eligible, no detection roulette
+    const pool=man.items;
+    const f=shuffle(pool.filter(p=>p.hasFace)).slice(0,3);
+    const s=shuffle(pool.filter(p=>!p.hasFace&&p.blob)).slice(0,2);
+    const fill=shuffle(pool.filter(p=>!f.includes(p)&&!s.includes(p)));
+    chosen=shuffle([...f,...s]);
+    while(chosen.length<5&&fill.length) chosen.push(fill.pop());
+    chosen=chosen.map(p=>({t:p.file,n:p.name,a:p.artist,y:p.year,
+                           kind:p.hasFace?"face":"still",blob:p.blob,src:p.source}));
+    urls=Object.fromEntries(chosen.map(c=>[c.t,"assets/"+c.t]));
+  }else{
+    const f=shuffle(POOL.filter(p=>p.kind==="face")).slice(0,3);
+    const s=shuffle(POOL.filter(p=>p.kind==="still"||p.kind==="both")).slice(0,2);
+    chosen=shuffle([...f,...s]);
+    urls=await resolveAll(chosen.map(c=>c.t));
+  }
+
+  const works=[];
+  await Promise.all(chosen.map(async spec=>{
+    const u=urls[spec.t]; if(!u) return;
+    try{
+      const img=await loadImg(u);
+      const H=Math.round(img.height*(DISPW/img.width));
+      const c=document.createElement("canvas");c.width=DISPW;c.height=H;
+      c.getContext("2d",{willReadFrequently:true}).drawImage(img,0,0,DISPW,H);
+      works.push({spec,img,canvas:c,W:DISPW,H});
+    }catch(e){}
+  }));
+  if(works.length<3){ fail("Could not load enough paintings. Press New gallery."); return; }
+
+  // analyse
+  for(const w of works){
+    const res=fl.detect(w.canvas);
+    w.face=res.faceLandmarks&&res.faceLandmarks[0]||null;
+    const ctx=w.canvas.getContext("2d",{willReadFrequently:true});
+    // fruit-like target, avoiding the face if there is one.
+    // Generous margins: a graft that runs off the edge of the canvas reads as
+    // a rendering bug rather than an anomaly.
+    let box={x0:Math.round(w.W*0.16),y0:Math.round(w.H*0.30),
+             x1:Math.round(w.W*0.84),y1:Math.round(w.H*0.88)};
+    if(w.face){
+      const m=faceMetrics(w.face,w.W,w.H);
+      box.y0=Math.max(box.y0,Math.round(m.cy+m.h*0.55));
+      if(box.y1-box.y0<50) box={x0:Math.round(w.W*0.16),y0:Math.round(w.H*0.55),
+                                x1:Math.round(w.W*0.84),y1:Math.round(w.H*0.90)};
+    }
+    // curated manifests carry a pre-computed, hand-checked target in normalised
+    // coords — no distance transform at load, and no bad targets slipping through
+    if(w.spec.blob){
+      w.blob={x:Math.round(w.spec.blob.x*w.W),
+              y:Math.round(w.spec.blob.y*w.H),
+              r:Math.round(w.spec.blob.r*w.W)};
+    }else{
+      w.blob=validBlob(findBlob(ctx,w.W,w.H,warmMass,box),box)
+          || validBlob(findBlob(ctx,w.W,w.H,anyMass,box),box);
+    }
+    w.clean=ctx.getImageData(0,0,w.W,w.H);
+  }
+
+  // harvest parts from a hi-res portrait
+  let parts=[];
+  const donor=works.find(w=>w.face);
+  if(donor){
+    const HR=900, hh=Math.round(donor.img.height*(HR/donor.img.width));
+    const hc=document.createElement("canvas");hc.width=HR;hc.height=hh;
+    hc.getContext("2d",{willReadFrequently:true}).drawImage(donor.img,0,0,HR,hh);
+    const hres=fl.detect(hc);
+    if(hres.faceLandmarks&&hres.faceLandmarks.length){
+      const hf=hres.faceLandmarks[0];
+      for(const ring of ["eyeL","eyeR","mouth"]){
+        const p=harvestFeature(hc,hf,ring,{expand:ring==="mouth"?1.5:1.8,
+                                           tall:ring==="mouth"?1.1:1.25});
+        if(p) parts.push(p);
+      }
+    }
+  }
+
+  // candidate anomalies
+  const cands=[];
+  works.forEach((w,i)=>{
+    if(w.face){
+      cands.push({i,op:"rictus",  w:0.9});
+      cands.push({i,op:"drift",   w:1.0});
+      cands.push({i,op:"elongate",w:0.7});
+    }
+    if(w.blob&&parts.length) cands.push({i,op:"graft",w:1.3});
+  });
+  if(!cands.length){ fail("No anomaly could be placed. Press New gallery."); return; }
+
+  // pick up to 5, at most 2 per painting, prefer spreading across works
+  shuffle(cands);
+  cands.sort((a,b)=>b.w*Math.random()-a.w*Math.random());
+  const perWork={}, picked=[];
+  for(const c of cands){
+    if(picked.length>=5) break;
+    perWork[c.i]=perWork[c.i]||0;
+    if(perWork[c.i]>=2) continue;
+    if(picked.some(p=>p.i===c.i&&p.op===c.op)) continue;
+    // don't stack two face warps on the same face
+    if(perWork[c.i]===1 && c.op!=="graft" && picked.some(p=>p.i===c.i&&p.op!=="graft")) continue;
+    perWork[c.i]++; picked.push(c);
+  }
+
+  // apply
+  const anomalies=[];
+  for(const p of picked){
+    const w=works[p.i];
+    const ctx=w.canvas.getContext("2d",{willReadFrequently:true});
+    let box=null, label="";
+    if(p.op==="rictus"){ box=opRictus(ctx,w.W,w.H,w.face,1.0); label="the mouth is not a mouth a face can make"; }
+    else if(p.op==="drift"){ box=opDrift(ctx,w.W,w.H,w.face,1.6); label="one eye has drifted out of true"; }
+    else if(p.op==="elongate"){ box=opElongate(ctx,w.W,w.H,w.face,1.1); label="the jaw has been drawn down"; }
+    else {
+      const part=parts[(Math.random()*parts.length)|0];
+      const sz=graftSize(w.blob.r,38,72)*(part.kind==="mouth"?0.85:1);
+      box=graftFeature(ctx,w.W,w.H,part,w.blob,{
+        sizeRel:sz,
+        rot:(Math.random()-0.5)*0.35,bulge:0.42,shadeAmt:0.45,
+        gradeAmt:0.10,crease:0.55,satKeep:1.35});
+      label=part.kind==="mouth"?"there is a mouth on it":"there is an eye on it";
+    }
+    anomalies.push({work:p.i,op:p.op,box,label,found:false});
+    w.dirty=ctx.getImageData(0,0,w.W,w.H);
+  }
+
+  STATE={works,anomalies,found:0,total:anomalies.length,
+         endAt:performance.now()+DUR,over:false};
+  $("#ntotal").textContent=STATE.total;
+  $("#nfound").textContent="0";
+  paint();
+  $("#again").disabled=false;
+  $("#say").className="say";
+  $("#say").textContent="Look closely. Click anything that is wrong.";
+  TICK=setInterval(tick,100);
+  tick();
+}
+
+function paint(){
+  const gal=$("#gal"); gal.innerHTML="";
+  STATE.works.forEach((w,i)=>{
+    const plate=document.createElement("div");
+    plate.className="plate";
+    plate.innerHTML=`<div class="mount"><div class="mat"></div></div>
+      <div class="cap"><b>${esc(w.spec.n)}</b><i>${esc(w.spec.a)}${w.spec.y?" · "+esc(w.spec.y):""}</i></div>`;
+    plate.querySelector(".mat").appendChild(w.canvas);
+    w.canvas.addEventListener("click",ev=>onClick(ev,i));
+    gal.appendChild(plate);
+    w.plate=plate;
+  });
+}
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function onClick(ev,wi){
+  if(!STATE||STATE.over) return;
+  const c=STATE.works[wi].canvas;
+  const r=c.getBoundingClientRect();
+  const x=(ev.clientX-r.left)*(c.width/r.width);
+  const y=(ev.clientY-r.top)*(c.height/r.height);
+  const hit=STATE.anomalies.find(a=>{
+    if(a.found||a.work!==wi) return false;
+    const [bx,by,bw,bh]=a.box, pad=14;
+    return x>=bx-pad&&x<=bx+bw+pad&&y>=by-pad&&y<=by+bh+pad;
+  });
+  if(hit){
+    hit.found=true; STATE.found++;
+    $("#nfound").textContent=STATE.found;
+    ringMark(c,hit.box,"rgba(127,163,104,.95)");
+    say("good","Found it — "+hit.label+".");
+    if(STATE.found>=STATE.total) finish(true);
+  }else{
+    STATE.endAt-=PENALTY;
+    say("bad","Nothing wrong there. −3 seconds.");
+  }
+}
+function ringMark(canvas,box,colour,dash){
+  const g=canvas.getContext("2d");
+  const [x,y,w,h]=box, pad=8;
+  g.save();
+  g.strokeStyle=colour; g.lineWidth=2;
+  if(dash) g.setLineDash(dash);
+  g.strokeRect(x-pad,y-pad,w+pad*2,h+pad*2);
+  g.restore();
+}
+function say(cls,msg){ $("#say").className="say "+(cls||""); $("#say").textContent=msg; }
+
+function tick(){
+  if(!STATE||STATE.over) return;
+  const left=Math.max(0,STATE.endAt-performance.now());
+  const s=Math.ceil(left/1000);
+  const cl=$("#clock");
+  cl.textContent=`${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
+  cl.className="clock"+(s<=10?" crit":s<=30?" warn":"");
+  const bar=$("#bar");
+  bar.style.width=(left/DUR*100)+"%";
+  bar.className="bar"+(s<=10?" crit":"");
+  if(left<=0) finish(false);
+}
+
+function finish(won){
+  STATE.over=true; clearInterval(TICK);
+  const missed=STATE.anomalies.filter(a=>!a.found);
+  for(const a of missed) ringMark(STATE.works[a.work].canvas,a.box,"rgba(184,53,44,.9)",[6,4]);
+  for(const w of STATE.works) w.plate.classList.add("lock");
+  const left=Math.max(0,STATE.endAt-performance.now());
+  const s=Math.ceil(left/1000);
+  $("#card").innerHTML= won
+    ? `<h2>All found</h2>
+       <p class="score">${Math.floor(s/60)}:${String(s%60).padStart(2,"0")} left</p>
+       <p>You caught all ${STATE.total}. The gallery is as it should be.</p>
+       <button id="go2">New gallery</button>`
+    : `<h2>Time</h2>
+       <p class="score bad">${STATE.found} / ${STATE.total}</p>
+       <p>${missed.length} ${missed.length===1?"thing":"things"} still wrong, now marked in red:<br>
+          <i>${missed.map(m=>esc(m.label)).join("<br>")}</i></p>
+       <button id="go2">New gallery</button>`;
+  $("#veil").classList.add("on");
+  $("#go2").onclick=()=>build().catch(e=>fail(e.message));
+}
+function fail(msg){
+  clearInterval(TICK);
+  $("#gal").innerHTML=`<div class="boot" style="color:#b8352c">${esc(msg)}</div>`;
+  $("#again").disabled=false;
+}
+
+$("#again").addEventListener("click",()=>build().catch(e=>fail(e.message)));
+build().catch(e=>fail(e.message));
+</script>
+</body>
+</html>

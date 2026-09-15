@@ -1,0 +1,88 @@
+# .github/workflows/deploy.yml
+#
+# Deploys the static site to GitHub Pages on every push to main.
+# There is no build step yet — the "build" job exists as the place to add one
+# (minify, bundle, vendor images) without touching the deploy wiring later.
+
+name: Deploy to Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:        # adds a "Run workflow" button in the Actions tab
+
+permissions:
+  contents: read
+  pages: write              # create the Pages deployment
+  id-token: write           # required by deploy-pages for its OIDC token
+
+# A newer push cancels an older pending deploy rather than racing it.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- sanity checks -------------------------------------------------
+      # Cheap, fast, and they catch the failure mode that actually bites a
+      # static site: a renamed file leaving a dead link in the menu.
+      - name: Check required pages exist
+        run: |
+          set -e
+          for f in index.html anomaly-gallery.html ops-lab.html eye-graft.html; do
+            test -f "$f" || { echo "::error::missing $f"; exit 1; }
+          done
+
+      # The game falls back to the live Commons API when no manifest is present,
+      # and Commons rate-limits hard. Warn loudly rather than shipping that.
+      - name: Warn if assets are not vendored
+        run: |
+          if [ ! -f assets/manifest.json ]; then
+            echo "::warning::assets/manifest.json missing — the game will fall back to the live Commons API, which rate-limits. Run fetch-assets.mjs and curate.html."
+          else
+            n=$(grep -o '"file"' assets/manifest.json | wc -l)
+            echo "assets/manifest.json present — $n paintings vendored"
+          fi
+
+      - name: Check internal links resolve
+        run: |
+          set -e
+          fail=0
+          for f in *.html; do
+            # pull href="..." targets that are local .html files
+            grep -oE 'href="[^":#?]+\.html"' "$f" 2>/dev/null \
+              | sed -E 's/href="([^"]+)"/\1/' \
+              | while read -r link; do
+                  if [ ! -f "$link" ]; then
+                    echo "::error file=$f::broken link -> $link"
+                    exit 1
+                  fi
+                done || fail=1
+          done
+          exit $fail
+
+      # --- add a real build here when you need one -----------------------
+      # - uses: actions/setup-node@v4
+      #   with: { node-version: '20' }
+      # - run: npm ci && npm run build
+
+      - uses: actions/configure-pages@v5
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .            # change to ./dist once a build step exists
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

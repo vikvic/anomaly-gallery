@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Anomaly Ops Lab</title>
+<style>
+  :root{--bg:#131110;--panel:#1c1917;--ink:#ddd3c4;--dim:#8a7f6e;--line:#2e2822;
+        --good:#8fae7a;--warn:#c98a3f;--box:#d8453a}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);padding:24px 16px 60px;
+       font:14px/1.55 "Iowan Old Style",Palatino,Georgia,serif}
+  h1{font-size:22px;letter-spacing:.12em;text-transform:uppercase;font-weight:400;margin:0 0 4px}
+  .sub{color:var(--dim);font-style:italic;margin:0 0 18px}
+  .bar{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:0 0 18px}
+  button,select{background:#241d16;color:var(--ink);border:1px solid #4a3d2c;padding:8px 14px;
+       font:inherit;font-size:13px;cursor:pointer;border-radius:2px}
+  button:hover{background:#31271d} button:disabled{opacity:.4;cursor:default}
+  label.chk{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--dim);cursor:pointer}
+  .wrap{max-width:1200px;margin:0 auto}
+  .case{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:14px;margin:0 0 18px}
+  .case h2{font-size:14px;font-weight:400;letter-spacing:.09em;text-transform:uppercase;
+        margin:0 0 3px;color:#cbbb98}
+  .case p{margin:0 0 12px;color:var(--dim);font-size:12.5px}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .cell{flex:1 1 240px;min-width:220px}
+  .cell h3{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--dim);
+        margin:0 0 5px;letter-spacing:.04em;text-transform:uppercase}
+  .cell h3 b{color:var(--warn);font-weight:400}
+  .cell h3 i{color:var(--box);font-style:normal}
+  canvas{display:block;width:100%;height:auto;border:1px solid #000;background:#0a0908}
+  table{border-collapse:collapse;width:100%;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;margin-top:6px}
+  th,td{text-align:left;padding:5px 9px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-weight:400}
+  td.n{text-align:right;color:var(--good)}
+  .budget{margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:2px;
+        background:#17140f;font:12px/1.6 ui-monospace,Menlo,Consolas,monospace}
+  .budget b{color:var(--good);font-weight:400}
+  .msg{color:var(--dim);font-style:italic}
+  .tag{font:10px ui-monospace,monospace;padding:1px 6px;border:1px solid var(--line);
+       border-radius:2px;color:var(--dim)}
+  @media(max-width:640px){.cell{flex:1 1 100%}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Anomaly Ops Lab</h1>
+  <p class="sub">Clone and removal on public-domain paintings. Both ops move the painting's own pixels — nothing is generated. Targets are chosen automatically.</p>
+
+  <div class="bar">
+    <button id="run">Run all cases</button>
+    <select id="quality">
+      <option value="fast">Removal: fast (patch 7, step 2)</option>
+      <option value="hq" selected>Removal: high quality (patch 9, step 1)</option>
+    </select>
+    <label class="chk"><input type="checkbox" id="showBox" checked> Mark changed region</label>
+    <span id="msg" class="msg"></span>
+  </div>
+
+  <div id="cases"></div>
+  <div id="budget"></div>
+</div>
+
+<script type="module">
+/* ============================================================================
+   COLOUR HELPERS
+   ========================================================================== */
+const rgb2hsl=(r,g,b)=>{r/=255;g/=255;b/=255;
+  const mx=Math.max(r,g,b),mn=Math.min(r,g,b),l=(mx+mn)/2,d=mx-mn;let h=0,s=0;
+  if(d){s=l>0.5?d/(2-mx-mn):d/(mx+mn);
+    if(mx===r)h=((g-b)/d+(g<b?6:0));else if(mx===g)h=((b-r)/d+2);else h=((r-g)/d+4);h*=60;}
+  return [h,s,l];};
+const hsl2rgb=(h,s,l)=>{h=((h%360)+360)%360;
+  const c=(1-Math.abs(2*l-1))*s,x=c*(1-Math.abs((h/60)%2-1)),m=l-c/2;let r,g,b;
+  if(h<60){r=c;g=x;b=0}else if(h<120){r=x;g=c;b=0}else if(h<180){r=0;g=c;b=x}
+  else if(h<240){r=0;g=x;b=c}else if(h<300){r=x;g=0;b=c}else{r=c;g=0;b=x}
+  return [(r+m)*255,(g+m)*255,(b+m)*255];};
+
+/* ============================================================================
+   TARGETING
+   Detector boxes are used for geometry only — the labels are unreliable on
+   painted subjects (Caravaggio's fruit reads as "donut"). Where the detector
+   returns nothing usable, a model-free saliency grid takes over, so every
+   painting is targetable.
+   ========================================================================== */
+function salientTargets(ctx,W,H,opt={}){
+  const {cell=16,margin=0.08,n=8,minR=18,maxR=38}=opt;
+  const d=ctx.getImageData(0,0,W,H).data;
+  const gw=Math.floor(W/cell),gh=Math.floor(H/cell);
+  const rr=new Float32Array(gw*gh),gg=new Float32Array(gw*gh),bb=new Float32Array(gw*gh),
+        lum=new Float32Array(gw*gh),va=new Float32Array(gw*gh);
+  for(let cy=0;cy<gh;cy++)for(let cx=0;cx<gw;cx++){
+    let sr=0,sg=0,sb=0,sl=0,sl2=0,cnt=0;
+    for(let y=cy*cell;y<(cy+1)*cell;y+=2)for(let x=cx*cell;x<(cx+1)*cell;x+=2){
+      const i=(y*W+x)*4,l=d[i]*0.299+d[i+1]*0.587+d[i+2]*0.114;
+      sr+=d[i];sg+=d[i+1];sb+=d[i+2];sl+=l;sl2+=l*l;cnt++;
+    }
+    const k=cy*gw+cx;
+    rr[k]=sr/cnt;gg[k]=sg/cnt;bb[k]=sb/cnt;lum[k]=sl/cnt;
+    va[k]=Math.sqrt(Math.max(0,sl2/cnt-(sl/cnt)**2));
+  }
+  let mr=0,mg=0,mb=0;
+  for(let k=0;k<gw*gh;k++){mr+=rr[k];mg+=gg[k];mb+=bb[k];}
+  mr/=gw*gh;mg/=gw*gh;mb/=gw*gh;
+  const score=new Float32Array(gw*gh);
+  for(let k=0;k<gw*gh;k++){
+    const dist=Math.hypot(rr[k]-mr,gg[k]-mg,bb[k]-mb)/255;
+    score[k]=va[k]/64*0.55+dist*0.45+lum[k]/255*0.20;
+  }
+  const mx=Math.floor(gw*margin),my=Math.floor(gh*margin),cands=[];
+  for(let cy=my;cy<gh-my;cy++)for(let cx=mx;cx<gw-mx;cx++)cands.push({cx,cy,s:score[cy*gw+cx]});
+  cands.sort((a,b)=>b.s-a.s);
+  const picked=[],minSep=Math.max(minR*2,cell*3);
+  for(const c of cands){
+    const x=(c.cx+0.5)*cell,y=(c.cy+0.5)*cell;
+    if(picked.some(p=>Math.hypot(p.x-x,p.y-y)<minSep))continue;
+    picked.push({x:Math.round(x),y:Math.round(y),
+      r:Math.round(minR+(maxR-minR)*Math.min(1,c.s)),src:"saliency",score:+c.s.toFixed(3)});
+    if(picked.length>=n)break;
+  }
+  return picked;
+}
+function pickTargets(ctx,W,H,detections,opt={}){
+  const {minArea=0.004,maxArea=0.14,n=8}=opt;
+  const out=[];
+  for(const det of (detections||[])){
+    const b=det.boundingBox,a=(b.width*b.height)/(W*H);
+    if(a<minArea||a>maxArea)continue;
+    out.push({x:Math.round(b.originX+b.width/2),y:Math.round(b.originY+b.height/2),
+              r:Math.round(Math.min(b.width,b.height)/2*0.95),src:"box"});
+  }
+  if(out.length<3){
+    for(const s of salientTargets(ctx,W,H,{n})){
+      if(out.some(o=>Math.hypot(o.x-s.x,o.y-s.y)<Math.max(o.r,s.r)*1.6))continue;
+      out.push(s);
+    }
+  }
+  return out.slice(0,n);
+}
+
+/* ============================================================================
+   OPS
+   ========================================================================== */
+function cloneObject(ctx,W,H,src,dst,opt={}){
+  const {rx=26,ry=26,scale=1,rot=0,flip=false,feather=0.44,
+         brightJitter=0.05,hueJitter=4,alpha=0.98}=opt;
+  const pw=Math.ceil(rx*2),ph=Math.ceil(ry*2);
+  const patch=document.createElement("canvas");patch.width=pw;patch.height=ph;
+  const px=patch.getContext("2d",{willReadFrequently:true});
+  px.drawImage(ctx.canvas,src.x-rx,src.y-ry,pw,ph,0,0,pw,ph);
+  const im=px.getImageData(0,0,pw,ph),d=im.data;
+  const bj=1+(Math.random()*2-1)*brightJitter,hj=(Math.random()*2-1)*hueJitter;
+  for(let y=0;y<ph;y++)for(let x=0;x<pw;x++){
+    const i=(y*pw+x)*4,nx=(x-rx)/rx,ny=(y-ry)/ry,dd=Math.hypot(nx,ny);
+    let a=1-Math.max(0,Math.min(1,(dd-(1-feather))/feather));
+    a=a*a*(3-2*a);d[i+3]=a*255;
+    if(a<=0)continue;
+    const [hh,s,l]=rgb2hsl(d[i],d[i+1],d[i+2]);
+    const [r2,g2,b2]=hsl2rgb(hh+hj,s,Math.max(0,Math.min(1,l*bj)));
+    d[i]=r2;d[i+1]=g2;d[i+2]=b2;
+  }
+  px.putImageData(im,0,0);
+  ctx.save();
+  ctx.translate(dst.x,dst.y);ctx.rotate(rot);
+  ctx.scale(flip?-scale:scale,scale);
+  ctx.globalAlpha=alpha;
+  ctx.drawImage(patch,-rx,-ry);
+  ctx.restore();
+  const w=rx*2*scale,h=ry*2*scale;
+  return {box:[dst.x-w/2,dst.y-h/2,w,h]};
+}
+
+function removeRegion(ctx,W,H,region,opt={}){
+  const {patch=9,step=1,cands=48,searchR=130}=opt;
+  const half=patch>>1;
+  const im=ctx.getImageData(0,0,W,H),d=im.data;
+  const mask=new Uint8Array(W*H);
+  const {cx,cy,rx,ry}=region;
+  for(let y=Math.max(0,(cy-ry)|0);y<Math.min(H,((cy+ry)|0)+1);y++)
+    for(let x=Math.max(0,(cx-rx)|0);x<Math.min(W,((cx+rx)|0)+1);x++){
+      const nx=(x-cx)/rx,ny=(y-cy)/ry;
+      if(nx*nx+ny*ny<=1)mask[y*W+x]=1;
+    }
+  let remaining=0;for(let i=0;i<mask.length;i++)if(mask[i])remaining++;
+  const total=remaining;
+  const offX=new Int16Array(W*H),offY=new Int16Array(W*H),hasOff=new Uint8Array(W*H);
+  const known=(sx,sy)=>{
+    if(sx-half<0||sy-half<0||sx+half>=W||sy+half>=H)return false;
+    for(let j=-half;j<=half;j++)for(let i=-half;i<=half;i++)
+      if(mask[(sy+j)*W+sx+i])return false;
+    return true;
+  };
+  const score=(px,py,sx,sy)=>{
+    let err=0,n=0;
+    for(let j=-half;j<=half;j++)for(let i=-half;i<=half;i++){
+      const tx=px+i,ty=py+j;
+      if(tx<0||ty<0||tx>=W||ty>=H)continue;
+      if(mask[ty*W+tx])continue;
+      const a=(ty*W+tx)*4,b=((sy+j)*W+sx+i)*4;
+      for(let k=0;k<3;k++){const dd=d[a+k]-d[b+k];err+=dd*dd;}
+      n++;
+    }
+    return n<4?Infinity:err/n;
+  };
+  let guard=0;
+  while(remaining>0&&guard++<500){
+    const boundary=[];
+    for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){
+      const p=y*W+x;if(!mask[p])continue;
+      if(!mask[p-1]||!mask[p+1]||!mask[p-W]||!mask[p+W])boundary.push(p);
+    }
+    if(!boundary.length)break;
+    for(let bi=0;bi<boundary.length;bi+=step){
+      const p=boundary[bi],px=p%W,py=(p/W)|0;
+      let best=null,bestErr=Infinity;
+      for(const np of [p-1,p+1,p-W,p+W,p-W-1,p-W+1,p+W-1,p+W+1]){
+        if(np<0||np>=W*H||!hasOff[np])continue;
+        const sx=px+offX[np],sy=py+offY[np];
+        if(!known(sx,sy))continue;
+        const e=score(px,py,sx,sy);
+        if(e<bestErr){bestErr=e;best=[sx,sy];}
+      }
+      for(let c=0;c<cands;c++){
+        const ang=Math.random()*Math.PI*2,rad=Math.max(rx,ry)*0.6+Math.random()*searchR;
+        const sx=Math.round(px+Math.cos(ang)*rad),sy=Math.round(py+Math.sin(ang)*rad);
+        if(!known(sx,sy))continue;
+        const e=score(px,py,sx,sy);
+        if(e<bestErr){bestErr=e;best=[sx,sy];}
+      }
+      if(!best)continue;
+      const [sx,sy]=best;
+      for(let j=-half;j<=half;j++)for(let i=-half;i<=half;i++){
+        const tx=px+i,ty=py+j;
+        if(tx<0||ty<0||tx>=W||ty>=H)continue;
+        const tp=ty*W+tx;if(!mask[tp])continue;
+        const a=tp*4,b=((sy+j)*W+sx+i)*4;
+        d[a]=d[b];d[a+1]=d[b+1];d[a+2]=d[b+2];d[a+3]=255;
+        mask[tp]=0;remaining--;
+        offX[tp]=sx-px;offY[tp]=sy-py;hasOff[tp]=1;
+      }
+    }
+  }
+  ctx.putImageData(im,0,0);
+  return {filled:total-remaining,total,box:[cx-rx,cy-ry,rx*2,ry*2]};
+}
+
+/* ============================================================================
+   SOURCES
+   ========================================================================== */
+const API="https://commons.wikimedia.org/w/api.php";
+const CASES=[
+  {file:"File:Basket of Fruit-Caravaggio (c.1595).jpg",
+   name:"Caravaggio — Basket of Fruit (c.1595)",
+   note:"Detector returns one box covering 37% of the canvas — too coarse to use, so saliency targets instead."},
+  {file:"File:Floris van Dyck - Still-Life with Fruit, Nuts and Cheese - WGA06346.jpg",
+   name:"Floris van Dyck — Still-Life with Fruit, Nuts and Cheese (1613)",
+   note:"Seven detector boxes, several well sized. Removal has to reconstruct cloth, which is harder than foliage."},
+  {file:"File:Abraham van Beyeren - Still life with Fruit and Vessels.jpg",
+   name:"Abraham van Beyeren — Still Life with Fruit and Vessels",
+   note:"Detector returns nothing at all. Pure saliency targeting, dark ground, specular vessels — the stress case."}
+];
+
+const $=s=>document.querySelector(s);
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+let DETECTOR=null;
+async function initDetector(){
+  try{
+    const mp=await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs");
+    const fs=await mp.FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    DETECTOR=await mp.ObjectDetector.createFromOptions(fs,{
+      baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite"},
+      runningMode:"IMAGE",scoreThreshold:0.30,maxResults:10});
+    return true;
+  }catch(e){ DETECTOR=null; return false; }   // saliency alone still works
+}
+
+async function fileUrl(title,width=900){
+  const u=`${API}?action=query&format=json&origin=*&prop=imageinfo&iiprop=url`
+        + `&iiurlwidth=${width}&titles=${encodeURIComponent(title)}`;
+  const res=await fetch(u);const txt=await res.text();
+  if(!txt.trim().startsWith("{")) throw new Error("Commons rate limit — wait a moment and retry");
+  const j=JSON.parse(txt);
+  const p=Object.values(j.query.pages)[0];
+  if(!p.imageinfo) throw new Error("not found: "+title);
+  return p.imageinfo[0].thumburl;
+}
+const loadImg=u=>new Promise((res,rej)=>{
+  const i=new Image();i.crossOrigin="anonymous";
+  i.onload=()=>res(i);i.onerror=()=>rej(new Error("image load failed"));
+  i.src=u;
+});
+
+/* Crop to a view that frames the changed region, and draw the marker in
+   crop space so the line weight stays constant regardless of zoom. */
+const W=560;
+function cropWithMark(src,view,outW,markBox){
+  const [cx,cy,cw,ch]=view;
+  const c=document.createElement("canvas");
+  c.width=outW;c.height=Math.round(outW*ch/cw);
+  const x=c.getContext("2d");x.imageSmoothingQuality="high";
+  x.drawImage(src,cx,cy,cw,ch,0,0,c.width,c.height);
+  if(markBox&&$("#showBox").checked){
+    const k=c.width/cw, pad=6;
+    const bx=(markBox[0]-cx)*k-pad, by=(markBox[1]-cy)*k-pad;
+    const bw=markBox[2]*k+pad*2, bh=markBox[3]*k+pad*2;
+    x.save();
+    x.strokeStyle="rgba(216,69,58,0.75)";
+    x.lineWidth=1.5;
+    x.setLineDash([5,4]);
+    x.strokeRect(bx,by,bw,bh);
+    x.restore();
+  }
+  return c;
+}
+function viewFor(boxes,W,H){
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for(const b of boxes){
+    x0=Math.min(x0,b[0]);y0=Math.min(y0,b[1]);
+    x1=Math.max(x1,b[0]+b[2]);y1=Math.max(y1,b[1]+b[3]);
+  }
+  const padX=(x1-x0)*0.75+30, padY=(y1-y0)*0.75+30;
+  x0=Math.max(0,x0-padX);y0=Math.max(0,y0-padY);
+  x1=Math.min(W,x1+padX);y1=Math.min(H,y1+padY);
+  return [x0,y0,x1-x0,y1-y0];
+}
+
+const TIMES=[];
+
+async function runCase(spec){
+  const host=document.createElement("div");
+  host.className="case";
+  host.innerHTML=`<h2>${spec.name}</h2><p>${spec.note}</p><div class="row"></div>`;
+  $("#cases").appendChild(host);
+  const row=host.querySelector(".row");
+  const addCell=(label,canvas)=>{
+    const d=document.createElement("div");d.className="cell";
+    const h=document.createElement("h3");h.innerHTML=label;
+    d.append(h,canvas);row.appendChild(d);
+  };
+
+  const img=await loadImg(await fileUrl(spec.file,900));
+  const H=Math.round(img.height*(W/img.width));
+  const base=document.createElement("canvas");base.width=W;base.height=H;
+  const bctx=base.getContext("2d",{willReadFrequently:true});
+  bctx.drawImage(img,0,0,W,H);
+
+  // ---- targeting
+  let t=performance.now();
+  let dets=[];
+  if(DETECTOR){ try{ dets=DETECTOR.detect(base).detections; }catch(e){} }
+  const targets=pickTargets(bctx,W,H,dets,{n:8});
+  const tTarget=performance.now()-t;
+  const srcMode=targets.length&&targets[0].src==="box"?"detector boxes":"saliency";
+
+  if(!targets.length){ row.innerHTML='<p style="color:#c4564a">No usable target found.</p>'; return; }
+
+  const dup=()=>{const c=document.createElement("canvas");c.width=W;c.height=H;
+    c.getContext("2d",{willReadFrequently:true}).drawImage(base,0,0);return c;};
+  const q=$("#quality").value==="hq"
+    ? {patch:9,step:1,cands:48,searchR:130}
+    : {patch:7,step:2,cands:28,searchR:110};
+
+  const srcT=targets[0];
+  const dstT=targets.find(t2=>Math.hypot(t2.x-srcT.x,t2.y-srcT.y)>srcT.r*2.4)||
+              {x:Math.min(W-srcT.r,srcT.x+srcT.r*3),y:srcT.y-srcT.r*0.6};
+
+  // ---- CLONE
+  const c1=dup(),x1=c1.getContext("2d",{willReadFrequently:true});
+  t=performance.now();
+  const cloneRes=cloneObject(x1,W,H,{x:srcT.x,y:srcT.y},{x:dstT.x,y:dstT.y},
+    {rx:srcT.r,ry:srcT.r*0.94,scale:0.95,rot:0.28,feather:0.46});
+  const tClone=performance.now()-t;
+
+  // ---- REMOVAL
+  const c2=dup(),x2=c2.getContext("2d",{willReadFrequently:true});
+  t=performance.now();
+  const remRes=removeRegion(x2,W,H,{cx:srcT.x,cy:srcT.y,rx:srcT.r*1.1,ry:srcT.r*1.05},q);
+  const tRemove=performance.now()-t;
+
+  const view=viewFor([cloneRes.box,remRes.box],W,H);
+  addCell(`Original &nbsp;<span class="tag">targets: ${srcMode}</span>`,
+          cropWithMark(base,view,420,null));
+  addCell(`Clone &nbsp;<b>${tClone.toFixed(1)} ms</b> &nbsp;<i>□ added</i>`,
+          cropWithMark(c1,view,420,cloneRes.box));
+  addCell(`Removal &nbsp;<b>${tRemove.toFixed(1)} ms</b> &nbsp;<i>□ erased</i>`,
+          cropWithMark(c2,view,420,remRes.box));
+
+  TIMES.push({name:spec.name.split(" — ")[0],target:tTarget,clone:tClone,
+              remove:tRemove,px:remRes.total,mode:srcMode});
+}
+
+async function run(){
+  $("#run").disabled=true;$("#cases").innerHTML="";$("#budget").innerHTML="";TIMES.length=0;
+  $("#msg").textContent="Loading detector…";
+  const t0=performance.now();
+  const ok=await initDetector();
+  if(!ok) $("#msg").textContent="Detector unavailable — saliency targeting only. ";
+  for(const spec of CASES){
+    $("#msg").textContent="Loading "+spec.name.split(" — ")[0]+"…";
+    try{ await runCase(spec); }
+    catch(e){
+      const d=document.createElement("div");d.className="case";
+      d.innerHTML=`<h2>${spec.name}</h2><p style="color:#c4564a">${e.message}</p>`;
+      $("#cases").appendChild(d);
+    }
+    await sleep(900);   // stay under Commons' rate limit
+  }
+  const wall=performance.now()-t0;
+  $("#msg").textContent="";
+  renderBudget(wall);
+  $("#run").disabled=false;
+}
+
+function renderBudget(wallMs){
+  if(!TIMES.length)return;
+  const rows=TIMES.map(t=>`<tr><td>${t.name}</td><td>${t.mode}</td>
+    <td class="n">${t.target.toFixed(1)}</td><td class="n">${t.clone.toFixed(1)}</td>
+    <td class="n">${t.remove.toFixed(1)}</td><td class="n">${t.px}</td></tr>`).join("");
+  const opTotal=TIMES.reduce((a,b)=>a+b.target+b.clone+b.remove,0);
+  $("#budget").innerHTML=`
+   <table>
+     <tr><th>Painting</th><th>Targeting</th><th style="text-align:right">Target (ms)</th>
+         <th style="text-align:right">Clone (ms)</th><th style="text-align:right">Removal (ms)</th>
+         <th style="text-align:right">Px filled</th></tr>
+     ${rows}
+   </table>
+   <div class="budget">
+     Compute, all stages, all ${TIMES.length} paintings: <b>${opTotal.toFixed(0)} ms</b><br>
+     Wall clock incl. model load, network and deliberate rate-limit delays: <b>${(wallMs/1000).toFixed(1)} s</b><br>
+     Against a 60 s budget: <b>${(wallMs/60000*100).toFixed(1)}%</b> — the ops are not the cost, the network is.
+   </div>`;
+}
+
+$("#run").addEventListener("click",run);
+$("#showBox").addEventListener("change",run);
+run();
+</script>
+</body>
+</html>

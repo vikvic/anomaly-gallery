@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Eye Graft</title>
+<style>
+  :root{--bg:#131110;--panel:#1c1917;--ink:#ddd3c4;--dim:#8a7f6e;--line:#2e2822;
+        --good:#8fae7a;--warn:#c98a3f}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);padding:24px 16px 60px;
+       font:14px/1.55 "Iowan Old Style",Palatino,Georgia,serif}
+  .wrap{max-width:1150px;margin:0 auto}
+  h1{font-size:22px;letter-spacing:.12em;text-transform:uppercase;font-weight:400;margin:0 0 4px}
+  .sub{color:var(--dim);font-style:italic;margin:0 0 18px;max-width:70ch}
+  .bar{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:0 0 20px}
+  button,select{background:#241d16;color:var(--ink);border:1px solid #4a3d2c;padding:8px 14px;
+       font:inherit;font-size:13px;cursor:pointer;border-radius:2px}
+  button:hover{background:#31271d} button:disabled{opacity:.4;cursor:default}
+  label.f{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--dim)}
+  input[type=range]{width:120px}
+  .sec{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:14px;margin:0 0 18px}
+  .sec h2{font-size:13px;font-weight:400;letter-spacing:.09em;text-transform:uppercase;
+       margin:0 0 3px;color:#cbbb98}
+  .sec p{margin:0 0 12px;color:var(--dim);font-size:12.5px;max-width:74ch}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .cell h3{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--dim);
+       margin:0 0 5px;letter-spacing:.04em;text-transform:uppercase}
+  .cell h3 b{color:var(--warn);font-weight:400}
+  canvas{display:block;border:1px solid #000;background:#0a0908;max-width:100%}
+  .eyes{display:flex;gap:7px;flex-wrap:wrap}
+  .eyes figure{margin:0;cursor:pointer;border:2px solid transparent;border-radius:2px;padding:2px}
+  .eyes figure.on{border-color:var(--warn)}
+  .eyes figcaption{font:10px ui-monospace,monospace;color:var(--dim);text-align:center;padding-top:3px}
+  .msg{color:var(--dim);font-style:italic;font-size:13px}
+  .note{color:#6d6455;font-size:12px;line-height:1.7;border-top:1px solid var(--line);
+       padding-top:14px;margin-top:22px;max-width:80ch}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Eye Graft</h1>
+  <p class="sub">An eye, taken from a real painted portrait and grafted onto fruit in a still life. Nothing is generated — the eye is oil paint harvested from another canvas of the same period, so it arrives already carrying the right brushwork, palette and varnish.</p>
+
+  <div class="bar">
+    <button id="run">Rebuild</button>
+    <label class="f">Size <input type="range" id="size" min="0.8" max="3.2" step="0.1" value="2.0"><span id="sizeV">2.0</span></label>
+    <label class="f">Curvature <input type="range" id="bulge" min="0" max="0.8" step="0.05" value="0.42"><span id="bulgeV">0.42</span></label>
+    <label class="f">Host shading <input type="range" id="shade" min="0" max="1.2" step="0.05" value="0.45"><span id="shadeV">0.45</span></label>
+    <span id="msg" class="msg"></span>
+  </div>
+
+  <div class="sec">
+    <h2>1 · Harvested eyes</h2>
+    <p>Face landmarks give a 16-point contour ring per eye. The cut is expanded well past the ring so the lid and socket shading come too — a bare eyeball reads as a sticker; the socket is what makes it read as anatomy. Click one to graft it.</p>
+    <div class="eyes" id="eyes"><span class="msg">loading portraits…</span></div>
+  </div>
+
+  <div class="sec">
+    <h2>2 · Target</h2>
+    <p>The graft point is found with a distance transform over a mask of warm saturated paint. Its maximum is by definition the pixel furthest from any edge — the centre of the fruit — and the distance value there is the largest circle that fits inside it. A colour centroid does not work: it lands on the boundary and the eye straddles two objects.</p>
+    <div class="row" id="target"></div>
+  </div>
+
+  <div class="sec">
+    <h2>3 · Graft</h2>
+    <p>Three things make it sit <i>in</i> the surface rather than on it: a spherical warp so the eye curves with the fruit; a multiply of the host's own luminance gradient so the apple's light and shadow run across the eye; and a soft crease ring where lid meets flesh.</p>
+    <div class="row" id="out"></div>
+  </div>
+
+  <p class="note">Sources: Wikimedia Commons, public domain. Face landmarks: MediaPipe FaceLandmarker (478 points), loaded from a CDN. Everything else is plain canvas pixel work — no generation, no inference beyond locating the eyes.</p>
+</div>
+
+<script type="module">
+import {FilesetResolver,FaceLandmarker}
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const $=s=>document.querySelector(s);
+const rgb2hsl=(r,g,b)=>{r/=255;g/=255;b/=255;
+  const mx=Math.max(r,g,b),mn=Math.min(r,g,b),l=(mx+mn)/2,d=mx-mn;let h=0,s=0;
+  if(d){s=l>0.5?d/(2-mx-mn):d/(mx+mn);
+    if(mx===r)h=((g-b)/d+(g<b?6:0));else if(mx===g)h=((b-r)/d+2);else h=((r-g)/d+4);h*=60;}
+  return [h,s,l];};
+const hsl2rgb=(h,s,l)=>{h=((h%360)+360)%360;
+  const c=(1-Math.abs(2*l-1))*s,x=c*(1-Math.abs((h/60)%2-1)),m=l-c/2;let r,g,b;
+  if(h<60){r=c;g=x;b=0}else if(h<120){r=x;g=c;b=0}else if(h<180){r=0;g=c;b=x}
+  else if(h<240){r=0;g=x;b=c}else if(h<300){r=x;g=0;b=c}else{r=c;g=0;b=x}
+  return [(r+m)*255,(g+m)*255,(b+m)*255];};
+
+/* ---------- MediaPipe eye contour rings (478-pt topology) ---------- */
+const EYE_RING={
+  right:[33,7,163,144,145,153,154,155,133,173,157,158,159,160,161,246],
+  left :[362,382,381,380,374,373,390,249,263,466,388,387,386,385,384,398]
+};
+
+/* ---------- 1. HARVEST ---------- */
+function harvestEye(srcCanvas,f,side,opt={}){
+  const {expand=1.8,feather=0.32}=opt;
+  const W=srcCanvas.width,H=srcCanvas.height;
+  const ring=EYE_RING[side].map(i=>({x:f[i].x*W,y:f[i].y*H}));
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9,cx=0,cy=0;
+  for(const p of ring){x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);
+    x1=Math.max(x1,p.x);y1=Math.max(y1,p.y);cx+=p.x;cy+=p.y;}
+  cx/=ring.length;cy/=ring.length;
+  const bw=(x1-x0)*expand, bh=(y1-y0)*expand*1.25;
+  const c=document.createElement("canvas");
+  c.width=Math.max(8,Math.round(bw)); c.height=Math.max(8,Math.round(bh));
+  const x=c.getContext("2d",{willReadFrequently:true});
+  x.drawImage(srcCanvas,cx-bw/2,cy-bh/2,bw,bh,0,0,c.width,c.height);
+  const im=x.getImageData(0,0,c.width,c.height),d=im.data;
+  const rx=c.width/2,ry=c.height/2;
+  for(let py=0;py<c.height;py++)for(let px=0;px<c.width;px++){
+    const nx=(px-rx)/rx,ny=(py-ry)/ry,dd=Math.hypot(nx,ny);
+    let a=1-Math.max(0,Math.min(1,(dd-(1-feather))/feather));
+    a=a*a*(3-2*a);
+    d[(py*c.width+px)*4+3]=a*255;
+  }
+  x.putImageData(im,0,0);
+  return {canvas:c,w:c.width,h:c.height};
+}
+
+/* ---------- 2. TARGET: distance transform ---------- */
+function findBlob(ctx,W,H,pred,box={}){
+  const {x0=0,y0=0,x1=W,y1=H}=box;
+  const d=ctx.getImageData(0,0,W,H).data;
+  const m=new Float32Array(W*H);
+  for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){
+    const k=(y*W+x)*4;
+    m[y*W+x]=pred(d[k],d[k+1],d[k+2])?Infinity:0;
+  }
+  for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){
+    const i=y*W+x; if(m[i]===0)continue;
+    let v=m[i];
+    if(x>x0)v=Math.min(v,m[i-1]+1);
+    if(y>y0)v=Math.min(v,m[i-W]+1);
+    if(x>x0&&y>y0)v=Math.min(v,m[i-W-1]+1.414);
+    if(x<x1-1&&y>y0)v=Math.min(v,m[i-W+1]+1.414);
+    m[i]=v;
+  }
+  let bi=-1,bv=0;
+  for(let y=y1-1;y>=y0;y--)for(let x=x1-1;x>=x0;x--){
+    const i=y*W+x; if(m[i]===0)continue;
+    let v=m[i];
+    if(x<x1-1)v=Math.min(v,m[i+1]+1);
+    if(y<y1-1)v=Math.min(v,m[i+W]+1);
+    if(x<x1-1&&y<y1-1)v=Math.min(v,m[i+W+1]+1.414);
+    if(x>x0&&y<y1-1)v=Math.min(v,m[i+W-1]+1.414);
+    m[i]=v;
+    if(v>bv){bv=v;bi=i;}
+  }
+  return bi<0?null:{x:bi%W,y:(bi/W)|0,r:Math.round(bv)};
+}
+const warmFruit=(r,g,b)=>{const [h,s,l]=rgb2hsl(r,g,b);
+  return (h<42||h>332)&&s>0.42&&l>0.20&&l<0.74;};
+
+/* ---------- 3. GRAFT ---------- */
+function graftEye(ctx,W,H,eye,target,opt={}){
+  const {sizeRel=2.0,rot=0.05,bulge=0.42,shadeAmt=0.45,gradeAmt=0.10,
+         crease=0.55,satKeep=1.35,alpha=0.97}=opt;
+  // saturation retention — host grading otherwise greys the iris out
+  const pre=document.createElement("canvas");
+  pre.width=eye.w;pre.height=eye.h;
+  const pc=pre.getContext("2d",{willReadFrequently:true});
+  pc.drawImage(eye.canvas,0,0);
+  {
+    const im=pc.getImageData(0,0,eye.w,eye.h),d=im.data;
+    for(let i=0;i<d.length;i+=4){ if(d[i+3]<4)continue;
+      const [h,s,l]=rgb2hsl(d[i],d[i+1],d[i+2]);
+      const [r,g,b]=hsl2rgb(h,Math.min(1,s*satKeep),l);
+      d[i]=r;d[i+1]=g;d[i+2]=b; }
+    pc.putImageData(im,0,0);
+  }
+  const ew=Math.max(10,Math.round(target.r*2*sizeRel));
+  const eh=Math.max(6,Math.round(ew*(eye.h/eye.w)));
+  const off=document.createElement("canvas");off.width=ew;off.height=eh;
+  const ox=off.getContext("2d",{willReadFrequently:true});
+  ox.drawImage(pre,0,0,ew,eh);
+
+  if(bulge>0){
+    const src=ox.getImageData(0,0,ew,eh),s=src.data;
+    const out=ox.createImageData(ew,eh),o=out.data;
+    const cx=ew/2,cy=eh/2;
+    for(let y=0;y<eh;y++)for(let x=0;x<ew;x++){
+      const nx=(x-cx)/cx,ny=(y-cy)/cy,r=Math.hypot(nx,ny);
+      const k=r<1?1-bulge*(1-Math.sqrt(1-Math.min(1,r*r))):1;
+      let fx=Math.max(0,Math.min(ew-1.001,cx+nx*cx*k));
+      let fy=Math.max(0,Math.min(eh-1.001,cy+ny*cy*k));
+      const x0=fx|0,y0=fy|0,ax=fx-x0,ay=fy-y0,di=(y*ew+x)*4;
+      const x1=Math.min(ew-1,x0+1),y1=Math.min(eh-1,y0+1);
+      for(let c=0;c<4;c++){
+        const i00=(y0*ew+x0)*4+c,i10=(y0*ew+x1)*4+c,i01=(y1*ew+x0)*4+c,i11=(y1*ew+x1)*4+c;
+        o[di+c]=(s[i00]*(1-ax)+s[i10]*ax)*(1-ay)+(s[i01]*(1-ax)+s[i11]*ax)*ay;
+      }
+    }
+    ox.putImageData(out,0,0);
+  }
+
+  const px=Math.round(target.x-ew/2),py=Math.round(target.y-eh/2);
+  const hx=Math.max(0,Math.min(W-ew,px)),hy=Math.max(0,Math.min(H-eh,py));
+  const host=ctx.getImageData(hx,hy,ew,eh).data;
+  let hm=0,hr=0,hg=0,hb=0,n=0;
+  for(let i=0;i<host.length;i+=4){
+    hm+=host[i]*0.299+host[i+1]*0.587+host[i+2]*0.114;
+    hr+=host[i];hg+=host[i+1];hb+=host[i+2];n++;
+  }
+  hm/=n;hr/=n;hg/=n;hb/=n;
+  const im=ox.getImageData(0,0,ew,eh),d=im.data;
+  const cx2=ew/2,cy2=eh/2;
+  for(let y=0;y<eh;y++)for(let x=0;x<ew;x++){
+    const i=(y*ew+x)*4; if(d[i+3]<4)continue;
+    const hl=host[i]*0.299+host[i+1]*0.587+host[i+2]*0.114;
+    const shade=1+((hl/Math.max(1,hm))-1)*shadeAmt;
+    const tg=[hr,hg,hb];
+    for(let c=0;c<3;c++){
+      let v=d[i+c]*shade;
+      v=v+(tg[c]-v)*gradeAmt*0.35;
+      d[i+c]=Math.max(0,Math.min(255,v));
+    }
+    const nx=(x-cx2)/cx2,ny=(y-cy2)/cy2,rr=Math.hypot(nx,ny);
+    if(rr>0.55){
+      const k=Math.min(1,(rr-0.55)/0.45)*crease;
+      for(let c=0;c<3;c++) d[i+c]*=(1-k*0.55);
+    }
+  }
+  ox.putImageData(im,0,0);
+  ctx.save();
+  ctx.globalAlpha=alpha;
+  ctx.translate(target.x,target.y);ctx.rotate(rot);
+  ctx.drawImage(off,-ew/2,-eh/2);
+  ctx.restore();
+  return {box:[target.x-ew/2,target.y-eh/2,ew,eh]};
+}
+
+/* ============================================================================
+   SOURCES
+   ========================================================================== */
+const API="https://commons.wikimedia.org/w/api.php";
+const PORTRAITS=[
+  ["Rembrandt","File:Rembrandt self portrait.jpg"],
+  ["Raphael","File:Raffaello Sanzio.jpg"],
+  ["Vermeer","File:Girl with a Pearl Earring.jpg"]
+];
+const HOST=["Caravaggio — Basket of Fruit","File:Basket of Fruit-Caravaggio (c.1595).jpg"];
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function fileUrl(title,width=900){
+  const u=`${API}?action=query&format=json&origin=*&prop=imageinfo&iiprop=url`
+        + `&iiurlwidth=${width}&titles=${encodeURIComponent(title)}`;
+  const res=await fetch(u);const txt=await res.text();
+  if(!txt.trim().startsWith("{")) throw new Error("Commons rate limit — wait a moment, then Rebuild");
+  const p=Object.values(JSON.parse(txt).query.pages)[0];
+  if(!p.imageinfo) throw new Error("not found: "+title);
+  return p.imageinfo[0].thumburl;
+}
+const loadImg=u=>new Promise((res,rej)=>{
+  const i=new Image();i.crossOrigin="anonymous";
+  i.onload=()=>res(i);i.onerror=()=>rej(new Error("image load failed"));i.src=u;});
+function toCanvas(img,W){
+  const H=Math.round(img.height*(W/img.width));
+  const c=document.createElement("canvas");c.width=W;c.height=H;
+  c.getContext("2d",{willReadFrequently:true}).drawImage(img,0,0,W,H);
+  return c;
+}
+
+let FL=null, EYES=[], SELECTED=0, HOSTC=null, TARGET=null;
+
+async function boot(){
+  $("#msg").textContent="loading landmarker…";
+  const fs=await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  FL=await FaceLandmarker.createFromOptions(fs,{
+    baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"},
+    runningMode:"IMAGE",numFaces:1});
+
+  // harvest
+  $("#eyes").innerHTML="";
+  for(const [name,file] of PORTRAITS){
+    $("#msg").textContent="harvesting "+name+"…";
+    try{
+      const c=toCanvas(await loadImg(await fileUrl(file,900)),900);
+      const res=FL.detect(c);
+      if(!res.faceLandmarks?.length) continue;
+      const f=res.faceLandmarks[0];
+      for(const side of ["left","right"]){
+        const e=harvestEye(c,f,side);
+        EYES.push({name:name+" "+side,...e});
+      }
+    }catch(err){ $("#msg").textContent=err.message; }
+    await sleep(700);
+  }
+  EYES.forEach((e,i)=>{
+    const fig=document.createElement("figure");
+    fig.className=i===SELECTED?"on":"";
+    const d=document.createElement("canvas");
+    const K=104/e.w; d.width=104; d.height=Math.round(e.h*K);
+    const dx=d.getContext("2d"); dx.imageSmoothingQuality="high";
+    dx.fillStyle="#3a332c"; dx.fillRect(0,0,d.width,d.height);
+    dx.drawImage(e.canvas,0,0,d.width,d.height);
+    const cap=document.createElement("figcaption"); cap.textContent=e.name;
+    fig.append(d,cap);
+    fig.onclick=()=>{SELECTED=i;
+      document.querySelectorAll("#eyes figure").forEach((n,j)=>n.className=j===i?"on":"");
+      render();};
+    $("#eyes").appendChild(fig);
+  });
+
+  // host + target
+  $("#msg").textContent="loading host painting…";
+  HOSTC=toCanvas(await loadImg(await fileUrl(HOST[1],900)),700);
+  const hc=HOSTC.getContext("2d",{willReadFrequently:true});
+  const W=HOSTC.width,H=HOSTC.height;
+  TARGET=findBlob(hc,W,H,warmFruit,{
+    x0:Math.round(W*0.25),y0:Math.round(H*0.45),
+    x1:Math.round(W*0.60),y1:Math.round(H*0.80)});
+  $("#msg").textContent="";
+  render();
+}
+
+function zoomCell(parent,src,cx,cy,s,out,label){
+  const cell=document.createElement("div");cell.className="cell";
+  const h=document.createElement("h3");h.innerHTML=label;
+  const c=document.createElement("canvas");c.width=out;c.height=out;
+  const g=c.getContext("2d");g.imageSmoothingQuality="high";
+  g.drawImage(src,cx-s,cy-s,s*2,s*2,0,0,out,out);
+  cell.append(h,c);parent.appendChild(cell);
+  return c;
+}
+
+function render(){
+  if(!HOSTC||!TARGET||!EYES.length) return;
+  const W=HOSTC.width,H=HOSTC.height;
+  const dup=()=>{const c=document.createElement("canvas");c.width=W;c.height=H;
+    c.getContext("2d",{willReadFrequently:true}).drawImage(HOSTC,0,0);return c;};
+
+  // target panel
+  const tp=$("#target");tp.innerHTML="";
+  const mark=dup();const mx=mark.getContext("2d");
+  mx.strokeStyle="rgba(143,174,122,.95)";mx.lineWidth=2;
+  mx.beginPath();mx.arc(TARGET.x,TARGET.y,TARGET.r,0,Math.PI*2);mx.stroke();
+  mx.beginPath();mx.moveTo(TARGET.x-7,TARGET.y);mx.lineTo(TARGET.x+7,TARGET.y);
+  mx.moveTo(TARGET.x,TARGET.y-7);mx.lineTo(TARGET.x,TARGET.y+7);mx.stroke();
+  zoomCell(tp,mark,TARGET.x,TARGET.y,44,280,
+    `inscribed centre <b>${TARGET.x},${TARGET.y}</b> · r=<b>${TARGET.r}</b>`);
+  const full=document.createElement("div");full.className="cell";
+  const fh=document.createElement("h3");fh.textContent="whole painting";
+  const fc=document.createElement("canvas");fc.width=420;fc.height=Math.round(H*(420/W));
+  fc.getContext("2d").drawImage(mark,0,0,fc.width,fc.height);
+  full.append(fh,fc);tp.appendChild(full);
+
+  // graft panel
+  const op={sizeRel:+$("#size").value,bulge:+$("#bulge").value,
+            shadeAmt:+$("#shade").value,rot:0.05,gradeAmt:0.10,crease:0.55,satKeep:1.35};
+  const out=$("#out");out.innerHTML="";
+  zoomCell(out,dup(),TARGET.x,TARGET.y,40,280,"Original");
+  const g=dup();
+  const t0=performance.now();
+  graftEye(g.getContext("2d",{willReadFrequently:true}),W,H,EYES[SELECTED],TARGET,op);
+  const ms=(performance.now()-t0).toFixed(1);
+  zoomCell(out,g,TARGET.x,TARGET.y,40,280,`Grafted — ${EYES[SELECTED].name} · <b>${ms} ms</b>`);
+  const wide=document.createElement("div");wide.className="cell";
+  const wh=document.createElement("h3");wh.textContent="in context";
+  const wc=document.createElement("canvas");wc.width=420;wc.height=Math.round(H*(420/W));
+  wc.getContext("2d").drawImage(g,0,0,wc.width,wc.height);
+  wide.append(wh,wc);out.appendChild(wide);
+}
+
+for(const id of ["size","bulge","shade"]){
+  $("#"+id).addEventListener("input",e=>{
+    $("#"+id+"V").textContent=(+e.target.value).toFixed(2);
+    render();
+  });
+}
+$("#run").addEventListener("click",()=>{EYES=[];SELECTED=0;boot();});
+boot().catch(e=>{$("#msg").textContent=e.message;});
+</script>
+</body>
+</html>

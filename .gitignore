@@ -1,0 +1,18 @@
+node_modules/
+*.log
+.env
+
+# OS cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# NOTE: assets/ is deliberately NOT ignored.
+# GitHub Pages serves the files committed to the repo, so the paintings and
+# assets/manifest.json must be tracked. Do not move them to Git LFS either —
+# Pages serves LFS pointer files rather than the images.
