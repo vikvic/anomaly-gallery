@@ -2,9 +2,7 @@
 
 Find what should not be there, in paintings that have been quietly altered.
 <img width="620" height="785" alt="image" src="https://github.com/user-attachments/assets/17e6ee42-684e-4031-ac46-51ff335d7870" />
-
-
-![A grafted eye on a Dutch still life, mid-round](docs/screenshot.png)
+<img width="620" height="459" alt="image" src="https://github.com/user-attachments/assets/8e69efb5-8e19-4c76-80ff-f94c29211e0b" />
 
 -->
 
