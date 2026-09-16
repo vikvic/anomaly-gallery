@@ -1,10 +1,8 @@
 # Anomaly Gallery
 
 Find what should not be there, in paintings that have been quietly altered.
+<img width="620" height="785" alt="image" src="https://github.com/user-attachments/assets/17e6ee42-684e-4031-ac46-51ff335d7870" />
 
-<!-- SCREENSHOT: drop the capture in as docs/screenshot.png, then delete this
-     comment's opening and closing markers so the image below renders.
-     Left commented so the repo landing page never shows a broken image.
 
 ![A grafted eye on a Dutch still life, mid-round](docs/screenshot.png)
 
