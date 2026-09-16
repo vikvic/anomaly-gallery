@@ -44,10 +44,12 @@ Graft size is clamped to 38–72px for exactly this reason.
 
 | File | |
 |---|---|
-| `index.html` | Landing page |
-| `anomaly-gallery.html` | The timed game |
+| `index.html` | **The game** — five paintings, one at a time, 30s each |
 | `eye-graft.html` | Eye harvest and graft, with live sliders |
 | `ops-lab.html` | Clone and removal ops, with per-op timings |
+
+The two technical pages are reachable from the game's header and exist for
+checking the image operations in isolation.
 
 ---
 

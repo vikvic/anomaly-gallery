@@ -40,8 +40,19 @@
   .say.bad{color:var(--red);font-style:normal}
 
   /* ---- gallery ---- */
-  .gal{display:flex;justify-content:center}
-  .gal .plate{width:100%;max-width:660px}
+  .gal{display:flex;justify-content:center;position:relative}
+  .gal .plate{width:100%;max-width:660px;transition:filter .25s}
+  /* Pause must HIDE the painting. Otherwise pausing is just an unlimited timer:
+     you would study the canvas at leisure and unpause to click. */
+  .gal.paused .plate{filter:blur(22px) saturate(.25) brightness(.3)}
+  .gal.paused::after{content:"Paused";position:absolute;inset:0;display:grid;
+     place-items:center;pointer-events:none;
+     font:14px/1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.28em;
+     text-transform:uppercase;color:#8d8170}
+  .nav{display:flex;gap:12px;align-items:center;margin-left:auto}
+  .nav a{color:var(--dim);font-size:12px;letter-spacing:.06em;text-decoration:none;
+     border-bottom:1px solid #362d22;padding-bottom:2px}
+  .nav a:hover{color:var(--ink);border-color:#6b5836}
   .pos{font:13px ui-monospace,Menlo,Consolas,monospace;color:var(--dim);
        letter-spacing:.06em;min-width:52px}
   .rrows{text-align:left;margin:14px 0 18px;border-top:1px solid #2c251d}
@@ -113,9 +124,14 @@
     <div class="barwrap"><div class="bar" id="bar"></div></div>
     <div class="pos" id="pos">– / –</div>
     <div class="found">found <b id="nfound">0</b> / <span id="ntotal">5</span></div>
+    <button id="pause" disabled>Pause</button>
     <button id="skip" disabled>Skip ahead</button>
     <button id="again">New gallery</button>
     <button id="sound" title="Audio starts on your first click">Sound: on</button>
+    <span class="nav">
+      <a href="eye-graft.html">Eye graft</a>
+      <a href="ops-lab.html">Ops lab</a>
+    </span>
     <div class="say" id="say">Look closely. Click anything that is wrong.</div>
   </div>
 
@@ -617,6 +633,8 @@ const SND=(()=>{
 
 /* ========================= game ========================= */
 const ROUND_MS=30000, PENALTY=3000, DISPW=620;
+const ROUNDS=5;              // paintings per gallery
+const UNIQUE_MODES=true;     // each painting wrong in a different way
 let STATE=null, TICK=null;
 
 const shuffle=a=>{for(let i=a.length-1;i>0;i--){const j=(Math.random()*(i+1))|0;[a[i],a[j]]=[a[j],a[i]];}return a;};
@@ -648,17 +666,20 @@ async function build(){
   if(man){
     // curated local assets: selection is guaranteed-eligible, no detection roulette
     const pool=man.items;
-    const f=shuffle(pool.filter(p=>p.hasFace)).slice(0,3);
-    const s=shuffle(pool.filter(p=>!p.hasFace&&p.blob)).slice(0,2);
+    // Over-fetch: three of the five modes need a face and two need a graft
+    // target, and detection still fails on some paintings, so spares are what
+    // make a full five-round gallery reliable rather than lucky.
+    const f=shuffle(pool.filter(p=>p.hasFace)).slice(0,5);
+    const s=shuffle(pool.filter(p=>!p.hasFace&&p.blob)).slice(0,4);
     const fill=shuffle(pool.filter(p=>!f.includes(p)&&!s.includes(p)));
     chosen=shuffle([...f,...s]);
-    while(chosen.length<5&&fill.length) chosen.push(fill.pop());
+    while(chosen.length<9&&fill.length) chosen.push(fill.pop());
     chosen=chosen.map(p=>({t:p.file,n:p.name,a:p.artist,y:p.year,
                            kind:p.hasFace?"face":"still",blob:p.blob,src:p.source}));
     urls=Object.fromEntries(chosen.map(c=>[c.t,"assets/"+c.t]));
   }else{
-    const f=shuffle(POOL.filter(p=>p.kind==="face")).slice(0,3);
-    const s=shuffle(POOL.filter(p=>p.kind==="still"||p.kind==="both")).slice(0,2);
+    const f=shuffle(POOL.filter(p=>p.kind==="face")).slice(0,5);
+    const s=shuffle(POOL.filter(p=>p.kind==="still"||p.kind==="both")).slice(0,4);
     chosen=shuffle([...f,...s]);
     urls=await resolveAll(chosen.map(c=>c.t));
   }
@@ -737,28 +758,45 @@ async function build(){
     }
   }
 
-  // ---- one round per painting: each gets 1–2 anomalies, or is dropped ----
-  const rounds=[];
-  works.forEach((w,i)=>{
-    const opts=[];
-    if(w.face){
-      opts.push({op:"drift",   wt:1.0});
-      opts.push({op:"rictus",  wt:0.9});
-      opts.push({op:"elongate",wt:0.9});   // was 0.7 — no longer the weak one
+  /* ---- one distinct mode per painting ----
+     There are exactly five modes and exactly five rounds, so by default each
+     painting is wrong in a different way and no trick repeats within a gallery.
+     Assignment is a small matching problem, not a per-painting roll: each mode
+     has an eligibility test (a face, or a graft target plus a harvested part of
+     the right kind), and modes are handed to the first spare painting that can
+     host them. Over-fetching earlier is what keeps this from coming up short. */
+  const haveEye   = parts.some(p=>p.kind!=="mouth");
+  const haveMouth = parts.some(p=>p.kind==="mouth");
+  const MODES=[
+    {id:"drift",      fits:w=>!!w.face},
+    {id:"rictus",     fits:w=>!!w.face},
+    {id:"elongate",   fits:w=>!!w.face},
+    {id:"graftEye",   fits:w=>w.graftable&&haveEye},
+    {id:"graftMouth", fits:w=>w.graftable&&haveMouth}
+  ];
+  const slots=shuffle(works.map((w,i)=>({w,i})));
+  const taken=new Set(), rounds=[];
+  for(const mode of shuffle(MODES.slice())){
+    if(rounds.length>=ROUNDS) break;
+    const slot=slots.find(s=>!taken.has(s.i)&&mode.fits(s.w));
+    if(!slot) continue;
+    taken.add(slot.i);
+    rounds.push({work:slot.i,mode:mode.id});
+  }
+  // short of five? repeat a mode rather than run a short gallery — five rounds
+  // matters more than perfect variety on a bad draw
+  if(rounds.length<ROUNDS){
+    for(const s of slots){
+      if(rounds.length>=ROUNDS) break;
+      if(taken.has(s.i)) continue;
+      const m=shuffle(MODES.slice()).find(m=>m.fits(s.w));
+      if(!m) continue;
+      taken.add(s.i);
+      rounds.push({work:s.i,mode:m.id});
     }
-    if(w.graftable&&parts.length) opts.push({op:"graft",wt:1.4});
-    if(!opts.length) return;                 // nothing placeable — leave it out
-    shuffle(opts);
-    opts.sort((a,b)=>b.wt*Math.random()-a.wt*Math.random());
-    const take=[opts[0]];
-    // a second only when it is a different family, so one face isn't warped twice
-    const second=opts.find(o=>o!==opts[0] && (o.op==="graft")!==(opts[0].op==="graft"));
-    if(second && Math.random()<0.5) take.push(second);
-    rounds.push({work:i,ops:take.map(t=>t.op)});
-  });
+  }
   if(!rounds.length){ fail("No anomaly could be placed. Press New gallery."); return; }
   shuffle(rounds);
-  rounds.length=Math.min(rounds.length,5);
 
   // ---- apply ----
   const anomalies=[];
@@ -766,13 +804,18 @@ async function build(){
     const w=works[r.work];
     const ctx=w.canvas.getContext("2d",{willReadFrequently:true});
     w.anomalies=[];
-    for(const op of r.ops){
+    {
+      const mode=r.mode;
+      const op=mode.startsWith("graft")?"graft":mode;
       let box=null,label="",kind=null,tone=null,grain=null;
       if(op==="rictus"){ box=opRictus(ctx,w.W,w.H,w.face,1.0); label="the mouth is not one a face can make"; }
       else if(op==="drift"){ box=opDrift(ctx,w.W,w.H,w.face,4.0); label="one eye has drifted out of true"; }
       else if(op==="elongate"){ box=opElongate(ctx,w.W,w.H,w.face,1.5); label="the jaw has been drawn down"; }
       else{
-        const part=parts[(Math.random()*parts.length)|0];
+        // the mode dictates which body part, so a gallery never repeats a trick
+        const want=mode==="graftMouth"?"mouth":"eye";
+        const pick=parts.filter(p=>(p.kind==="mouth")===(want==="mouth"));
+        const part=(pick.length?pick:parts)[(Math.random()*(pick.length||parts.length))|0];
         const aspect=part.h/part.w;
         // walk candidates largest-first and take the first that can hold the
         // graft entirely inside its own boundary
@@ -781,7 +824,7 @@ async function build(){
           const s=fitGraft(b.r,aspect,w.W*0.055,w.W*0.14);
           if(s){ target=b; sz=s*(part.kind==="mouth"?0.9:1); break; }
         }
-        if(!target) continue;
+        if(!target) break;
         box=graftFeature(ctx,w.W,w.H,part,target,{
           sizeRel:sz,
           rot:(Math.random()-0.5)*0.30,bulge:0.42,shadeAmt:0.45,
@@ -795,8 +838,10 @@ async function build(){
         label=part.kind==="mouth"?"there is a mouth where none belongs"
                                  :"there is an eye where none belongs";
       }
-      const a={op,box,label,kind,tone,grain,found:false};
-      w.anomalies.push(a); anomalies.push(a);
+      if(box){
+        const a={op,mode,box,label,kind,tone,grain,found:false};
+        w.anomalies.push(a); anomalies.push(a);
+      }
     }
     w.dirty=ctx.getImageData(0,0,w.W,w.H);
     w.dirtyCv=snap(w.canvas);       // the altered painting — the "eye open" state
@@ -1021,6 +1066,8 @@ function nextRound(){
   paintOne(w);
   $("#pos").textContent=`${STATE.idx+1} / ${STATE.rounds.length}`;
   $("#skip").disabled=false;
+  $("#pause").disabled=false; $("#pause").textContent="Pause";
+  STATE.paused=false; $("#gal").classList.remove("paused");
   const n=w.anomalies.length;
   say("", n===1 ? "One thing here is wrong." : `${n} things here are wrong.`);
   TICK=setInterval(tick,100);
@@ -1040,7 +1087,7 @@ function paintOne(w){
 }
 
 function onClick(ev,w){
-  if(!STATE||STATE.over||STATE.roundOver) return;
+  if(!STATE||STATE.over||STATE.roundOver||STATE.paused) return;
   const c=w.canvas, r=c.getBoundingClientRect();
   const x=(ev.clientX-r.left)*(c.width/r.width);
   const y=(ev.clientY-r.top)*(c.height/r.height);
@@ -1075,7 +1122,8 @@ function endRound(cleared){
   if(!STATE||STATE.roundOver) return;
   STATE.roundOver=true;
   clearInterval(TICK);
-  $("#skip").disabled=true;
+  $("#skip").disabled=true; $("#pause").disabled=true;
+  $("#gal").classList.remove("paused");
   const w=STATE.works[STATE.rounds[STATE.idx].work];
   const missed=w.anomalies.filter(a=>!a.found);
   for(const a of missed) ringMark(w.canvas,a.box,"rgba(184,53,44,.9)",[6,4]);
@@ -1101,8 +1149,37 @@ function ringMark(canvas,box,colour,dash){
 }
 function say(cls,msg){ $("#say").className="say "+(cls||""); $("#say").textContent=msg; }
 
-function tick(){
+/* Pause freezes the clock and the animations, and the CSS blurs the canvas out
+   — without that, pause is simply an unlimited timer. */
+function setPaused(p){
   if(!STATE||STATE.over||STATE.roundOver) return;
+  STATE.paused=p;
+  const w=STATE.works[STATE.rounds[STATE.idx].work];
+  if(p){
+    STATE.remaining=Math.max(0,STATE.endAt-performance.now());
+    clearInterval(TICK); TICK=null;
+    for(const a of w.anomalies) stopBlinking(a);
+    $("#gal").classList.add("paused");
+    $("#pause").textContent="Resume";
+    $("#skip").disabled=true;
+    say("","Paused.");
+  }else{
+    STATE.endAt=performance.now()+(STATE.remaining||ROUND_MS);
+    $("#gal").classList.remove("paused");
+    $("#pause").textContent="Pause";
+    $("#skip").disabled=false;
+    // restart whatever was animating before the pause
+    for(const a of w.anomalies){
+      if(!a.found||a.op!=="graft") continue;
+      if(a.kind==="mouth") startMouthing(w,a); else startBlinking(w,a);
+    }
+    say("","Look closely. Click anything that is wrong.");
+    TICK=setInterval(tick,100); tick();
+  }
+}
+
+function tick(){
+  if(!STATE||STATE.over||STATE.roundOver||STATE.paused) return;
   const left=Math.max(0,STATE.endAt-performance.now());
   const s=Math.ceil(left/1000);
   const cl=$("#clock");
@@ -1143,6 +1220,10 @@ function fail(msg){
 
 $("#again").addEventListener("click",()=>build().catch(e=>fail(e.message)));
 $("#skip").addEventListener("click",()=>endRound(false));
+$("#pause").addEventListener("click",()=>setPaused(!STATE||!STATE.paused));
+document.addEventListener("keydown",e=>{
+  if(e.key===" "&&STATE&&!STATE.over&&!STATE.roundOver){ e.preventDefault(); setPaused(!STATE.paused); }
+});
 /* Browsers refuse to start audio before a gesture, so the drone begins on the
    first click anywhere rather than on load. */
 document.addEventListener("pointerdown",()=>{ if(!SND.isMuted()) SND.startBgm(); },{once:true});

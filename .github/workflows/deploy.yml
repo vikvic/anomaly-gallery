@@ -33,7 +33,7 @@ jobs:
       - name: Check required pages exist
         run: |
           set -e
-          for f in index.html anomaly-gallery.html ops-lab.html eye-graft.html; do
+          for f in index.html ops-lab.html eye-graft.html; do
             test -f "$f" || { echo "::error::missing $f"; exit 1; }
           done
 
