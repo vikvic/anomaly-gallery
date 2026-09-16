@@ -2,9 +2,22 @@
 
 Find what should not be there, in paintings that have been quietly altered.
 
-Five public-domain works are hung on a wall. Five of them carry an anomaly —
-a human eye grafted onto fruit, a mouth where no mouth belongs, a face warped
-past where a face can go. You have two minutes.
+<!-- SCREENSHOT: drop the capture in as docs/screenshot.png, then delete this
+     comment's opening and closing markers so the image below renders.
+     Left commented so the repo landing page never shows a broken image.
+
+![A grafted eye on a Dutch still life, mid-round](docs/screenshot.png)
+
+-->
+
+[**Play it →**](https://vikvic.github.io/anomaly-gallery/)
+
+Nine public-domain works are loaded and five are hung, one at a time. Each one
+carries a single anomaly — a human eye grafted onto fruit, a mouth where no
+mouth belongs, a face warped past where a face can go. Thirty seconds apiece.
+
+The four spare works are not shown. They exist so that every op has an eligible
+host on a bad draw — see **Assets** below.
 
 **Nothing is generated.** Every anomaly is a deterministic pixel operation over
 the painting's own paint, which has two consequences that matter:
@@ -27,8 +40,8 @@ the painting's own paint, which has two consequences that matter:
 | **drift** | One eye pulled out of alignment with the other | a detected face |
 | **elongate** | The jaw drawn down | a detected face |
 
-The graft donor is always one of the five paintings on the wall, so the eye
-arrives already carrying the right period, palette and varnish.
+The graft donor is always one of the loaded paintings — hung or spare — so the
+eye arrives already carrying the right period, palette and varnish.
 
 Three things make a graft sit *in* a surface rather than on it: a spherical warp
 so it curves with the fruit, a multiply of the host's own luminance gradient so
@@ -36,7 +49,8 @@ it obeys the painting's lighting, and a soft crease ring where lid meets flesh.
 
 **Calibration note:** the effect lives in a narrow band. Too subtle and it reads
 as a smudge; too strong and it reads as a filter rather than as something wrong.
-Graft size is clamped to 38–72px for exactly this reason.
+Graft width is clamped to 5.5–14% of the canvas width for exactly this reason —
+34–87px against the current 620px canvas.
 
 ---
 
@@ -44,12 +58,16 @@ Graft size is clamped to 38–72px for exactly this reason.
 
 | File | |
 |---|---|
-| `index.html` | **The game** — five paintings, one at a time, 30s each |
+| `index.html` | **The game** — five paintings, one at a time, 30s each. Served at the site root |
+| `labs.html` | How it works — links to the three labs below |
 | `eye-graft.html` | Eye harvest and graft, with live sliders |
 | `ops-lab.html` | Clone and removal ops, with per-op timings |
+| `painterly-lab.html` | Whether a photo can be pushed into the paintings' domain well enough for the ops to land |
+| `curate.html` | Build-time asset curation — see **Assets** below |
 
 The two technical pages are reachable from the game's header and exist for
-checking the image operations in isolation.
+checking the image operations in isolation. `curate.html` is a build tool and is
+not linked from the game.
 
 ---
 
@@ -73,12 +91,21 @@ npx serve .
 
 Curation is not optional. Face detection fires on roughly **64%** of paintings
 returned by a "portrait" search — the misses are genre scenes with small or
-profile faces — and blob targeting succeeds on about **88%** of still lifes.
-So the fetcher over-fetches and the curator rejects: ~140 downloaded ≈ 100 usable.
+profile faces. Blob targeting, measured over the 36 vendored still lifes at the
+game's own 620px canvas, finds *some* target on **97%** of them but one large
+enough to actually host a graft on **78%**. Those are different numbers and the
+second is the one that matters. So the fetcher over-fetches and the curator
+rejects: ~140 downloaded ≈ 100 usable.
 
-Curating also writes `hasFace` and normalised blob coordinates into the manifest,
+Curating writes `hasFace`, `graftable` and normalised `blobs` into the manifest,
 so the game never runs a distance transform at load time and never selects a
 painting whose detection would fail.
+
+`curate.html` must stay in step with the game: it analyses at the same 620px
+width, and its targeting is the game's `findBlobs` verbatim. An earlier version
+ran its own single-best search at 470px and produced 27 graftable targets where
+the live path produces 28 — and since a precomputed blob short-circuits the live
+search, curating would have *degraded* the thing it exists to guarantee.
 
 **Mix:** a round uses 3 portraits + 2 still lifes, so the pool is weighted the
 same way. Portraits carry the three face warps and donate the eyes; still lifes
@@ -100,7 +127,8 @@ Measured, not estimated:
 | Graft | ~20 ms |
 | **Full 5-painting round** | **~0.5 s** |
 
-Against the two-minute clock, generation is free. The network is the only real cost.
+Against the 30-second round clock, generation is free. The network is the only
+real cost.
 
 ---
 

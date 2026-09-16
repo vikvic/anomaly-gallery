@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Anomaly Gallery — How It Works</title>
+<style>
+  :root{
+    --wall:#17130f; --wall2:#0a0807; --frame:#6b5836; --frame2:#3a2f1d;
+    --ink:#ddd2c0; --dim:#8d8170; --line:#2e2822; --accent:#b8352c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;color:var(--ink);
+       background:radial-gradient(130% 95% at 50% 4%,var(--wall),var(--wall2));
+       font:15px/1.6 "Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+       padding:56px 16px 70px;display:flex;align-items:flex-start;justify-content:center}
+  .wrap{max-width:860px;width:100%}
+  header{text-align:center;margin-bottom:34px}
+  h1{font-size:28px;letter-spacing:.18em;text-transform:uppercase;font-weight:400;margin:0 0 8px}
+  .tag{color:var(--dim);font-style:italic;margin:0;font-size:14.5px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px}
+  a.card{display:block;text-decoration:none;color:inherit;
+         background:linear-gradient(158deg,var(--frame),var(--frame2));padding:9px;border-radius:2px;
+         box-shadow:0 14px 32px rgba(0,0,0,.7),inset 0 0 0 1px rgba(255,255,255,.07);
+         transition:transform .16s}
+  a.card:hover{transform:translateY(-3px)}
+  .inner{background:#0b0908;padding:20px 18px 18px;min-height:150px;
+         display:flex;flex-direction:column;justify-content:flex-end}
+  .k{font:10px ui-monospace,Menlo,Consolas,monospace;letter-spacing:.14em;
+     text-transform:uppercase;color:#8a7452;margin-bottom:7px}
+  .t{font-size:17px;margin:0 0 6px;letter-spacing:.03em}
+  .d{font-size:12.5px;color:var(--dim);line-height:1.55;margin:0}
+  .note{margin-top:34px;border-top:1px solid var(--line);padding-top:18px;
+        color:#6d6455;font-size:12.5px;line-height:1.75}
+  .note b{color:#8d8170;font-weight:400}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Anomaly Gallery</h1>
+    <p class="tag">Find what should not be there, in paintings that have been quietly altered.</p>
+  </header>
+
+  <div class="cards">
+    <a class="card" href="./">
+      <div class="inner">
+        <div class="k">Play</div>
+        <p class="t">The Gallery</p>
+        <p class="d">Five works, five anomalies, thirty seconds each. Human parts grafted onto objects, and faces twisted past where a face can go.</p>
+      </div>
+    </a>
+
+    <a class="card" href="eye-graft.html">
+      <div class="inner">
+        <div class="k">Technique</div>
+        <p class="t">Eye Graft</p>
+        <p class="d">An eye harvested from a real portrait and grafted onto fruit — with live controls for size, curvature and host shading.</p>
+      </div>
+    </a>
+
+    <a class="card" href="ops-lab.html">
+      <div class="inner">
+        <div class="k">Technique</div>
+        <p class="t">Ops Lab</p>
+        <p class="d">Clone and removal measured on three still lifes, with the altered region marked and per-op timings.</p>
+      </div>
+    </a>
+
+    <a class="card" href="painterly-lab.html">
+      <div class="inner">
+        <div class="k">Experiment</div>
+        <p class="t">Painterly Pass</p>
+        <p class="d">Can a photograph be moved into the paintings' domain far enough that the existing ops land on it unchanged? Four panels and one measured number.</p>
+      </div>
+    </a>
+  </div>
+
+  <p class="note">
+    Every painting is public domain. Nothing is generated: each anomaly is a deterministic
+    pixel operation over the painting's own paint, so the answer key is exact by construction
+    and the brushwork, palette and varnish survive the edit intact.<br><br>
+    <b>Face landmarks</b> via MediaPipe (478 points) locate the features; everything after that
+    is plain canvas geometry.
+  </p>
+</div>
+</body>
+</html>

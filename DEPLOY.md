@@ -8,16 +8,23 @@ Commons and MediaPipe from jsDelivr at runtime, so your origin serves only
 
 ```
 .
-├── index.html               # landing page linking the three
-├── anomaly-gallery.html     # the timed 5-painting game
+├── index.html               # THE GAME — served at the site root
+├── labs.html                # "how it works" page linking the labs
 ├── ops-lab.html             # clone + removal ops, with timings
 ├── eye-graft.html           # eye harvest + graft, with live sliders
+├── painterly-lab.html       # photo -> painting-domain experiment
 ├── fetch-assets.mjs         # downloads paintings -> assets/
 ├── curate.html              # analyses them, writes assets/manifest.json
 ├── assets/                  # created by fetch-assets.mjs
+├── docs/                    # README screenshot
 ├── CNAME                    # one line: yourdomain.com
 └── .github/workflows/deploy.yml
 ```
+
+`index.html` is the game, not a landing page. The workflow asserts this — it
+greps `index.html` for `FaceLandmarker` and fails the deploy if it is missing,
+because these two files were swapped once before and the rename only half
+landed, leaving the docs describing a site that did not exist.
 
 Everything sits flat at the repo root — both tools resolve `assets/` relative to
 where they run, so no `tools/` subdirectory is needed.

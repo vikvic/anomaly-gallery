@@ -1,0 +1,938 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Painterly Pass Lab</title>
+<style>
+  :root{--bg:#131110;--panel:#1c1917;--ink:#ddd3c4;--dim:#8a7f6e;--line:#2e2822;
+        --good:#8fae7a;--warn:#c98a3f;--box:#d8453a}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);padding:24px 16px 60px;
+       font:14px/1.55 "Iowan Old Style",Palatino,Georgia,serif}
+  h1{font-size:22px;letter-spacing:.12em;text-transform:uppercase;font-weight:400;margin:0 0 4px}
+  .sub{color:var(--dim);font-style:italic;margin:0 0 18px}
+  .bar{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:0 0 14px}
+  button,select{background:#241d16;color:var(--ink);border:1px solid #4a3d2c;padding:8px 14px;
+       font:inherit;font-size:13px;cursor:pointer;border-radius:2px}
+  button:hover{background:#31271d} button:disabled{opacity:.4;cursor:default}
+  button.pri{border-color:#6d5a3c;background:#2e2416}
+  .wrap{max-width:1280px;margin:0 auto}
+  .case{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:14px;margin:0 0 18px}
+  .case h2{font-size:14px;font-weight:400;letter-spacing:.09em;text-transform:uppercase;
+        margin:0 0 3px;color:#cbbb98}
+  .case p{margin:0 0 12px;color:var(--dim);font-size:12.5px}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .cell{flex:1 1 260px;min-width:230px}
+  .cell h3{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--dim);
+        margin:0 0 5px;letter-spacing:.04em;text-transform:uppercase}
+  .cell h3 b{color:var(--warn);font-weight:400}
+  .cell h3 i{color:var(--good);font-style:normal}
+  canvas{display:block;width:100%;height:auto;border:1px solid #000;background:#0a0908}
+  table{border-collapse:collapse;width:100%;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;margin-top:6px}
+  th,td{text-align:left;padding:5px 9px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-weight:400}
+  td.n{text-align:right;color:var(--good)}
+  td.bad{color:var(--box)}
+  .msg{color:var(--dim);font-style:italic}
+  .sliders{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:9px 20px;
+        border:1px solid var(--line);border-radius:2px;padding:12px 14px;background:#17140f;margin:0 0 14px}
+  .sl{display:flex;align-items:center;gap:9px;font:11px ui-monospace,Menlo,Consolas,monospace;
+        color:var(--dim);letter-spacing:.03em}
+  .sl label{flex:0 0 96px;text-transform:uppercase}
+  .sl input{flex:1;accent-color:#8a6a3c}
+  .sl span{flex:0 0 42px;text-align:right;color:var(--ink)}
+  .privacy{border:1px solid #33402f;background:#161c14;color:#9db38c;border-radius:2px;
+        padding:9px 12px;font-size:12.5px;margin:0 0 16px}
+  .note{margin-top:12px;border-top:1px solid var(--line);padding-top:11px;
+        color:#6d6455;font-size:12.5px;line-height:1.7}
+  .note b{color:var(--dim);font-weight:400}
+  .verdict{margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:2px;
+        background:#17140f;font:12.5px/1.65 ui-monospace,Menlo,Consolas,monospace}
+  .verdict b{color:var(--good);font-weight:400}
+  .verdict i{color:var(--box);font-style:normal}
+  @media(max-width:700px){.cell{flex:1 1 100%}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Painterly Pass Lab</h1>
+  <p class="sub">Does moving a photograph into the paintings' domain let the existing, painting-calibrated ops land unchanged?</p>
+
+  <div class="privacy">
+    Images you choose are read with <code>createObjectURL</code> and stay in this tab.
+    There is no upload, no network request carrying pixels, and no storage. Reload and it is gone.
+  </div>
+
+  <div class="bar">
+    <a href="index.html" style="color:#8a7f6e;font-size:13px;text-decoration:none;
+       border-bottom:1px solid #362d22;padding-bottom:2px">&larr; Gallery</a>
+    <select id="src"><option value="">— loading manifest —</option></select>
+    <button id="pick">Choose local file…</button>
+    <input type="file" id="file" accept="image/*" hidden>
+    <select id="op">
+      <option value="graftEye">graft — eye</option>
+      <option value="graftMouth">graft — mouth</option>
+      <option value="rictus">rictus</option>
+      <option value="drift">drift</option>
+      <option value="elongate">elongate</option>
+    </select>
+    <button id="run" class="pri">Run</button>
+    <span id="msg" class="msg"></span>
+  </div>
+
+  <div class="sliders" id="sliders"></div>
+
+  <div class="bar">
+    <button data-preset="off">Preset: off</button>
+    <button data-preset="subtle">Preset: subtle</button>
+    <button data-preset="full">Preset: full</button>
+  </div>
+
+  <div class="case">
+    <h2>Four panels</h2>
+    <p>Left pair is the control. If the op lands in panel&nbsp;2 but not panel&nbsp;4, the pass is destroying
+       what the op needs. If it lands in panel&nbsp;4 but not panel&nbsp;2, the pass is doing its job.</p>
+    <div class="row">
+      <div class="cell"><h3>1 · Source</h3><canvas id="cA"></canvas></div>
+      <div class="cell"><h3>2 · Source + op <b>(control)</b></h3><canvas id="cB"></canvas></div>
+      <div class="cell"><h3>3 · Painterly</h3><canvas id="cC"></canvas></div>
+      <div class="cell"><h3>4 · Painterly + op <i>(the test)</i></h3><canvas id="cD"></canvas></div>
+    </div>
+    <div id="verdict"></div>
+    <table id="stats"></table>
+    <p class="note">
+      <b>Ordering.</b> Landmarks and blob targets are computed on the <em>unmodified</em> source and cached,
+      then reused for both panel&nbsp;2 and panel&nbsp;4. MediaPipe was trained on photographs, so it should
+      never be handed a stylised image — and the coordinates are geometric, so the pass does not invalidate them.<br><br>
+      <b>Shade spread</b> is the live range of <code>1 + (hostLum/hostMean − 1) × 0.45</code> across the graft
+      footprint — the exact multiply inside <code>graftFeature</code> that makes a graft sit <em>in</em> a surface
+      rather than on it. A spread near zero means flat lighting has degenerated it to a no-op.<br><br>
+      <b>What the measurements said.</b> Across 29 vendored still lifes, at their own live targets and real
+      graft sizes, that spread runs 0.28–1.13 with a median of 0.60. A synthetic flat photo sits at 0.03.
+      Three results follow, and the first two were not what I expected:<br>
+      &nbsp;· <b>Global chiaroscuro barely helps.</b> A 50px footprint is 8% of a 620px canvas, so a whole-image
+      gradient hardly varies across it — 0.063 → 0.068 at full strength.<br>
+      &nbsp;· <b>Kuwahara actively hurts</b> — 0.063 → 0.023. The stage that most makes a photo look painted is
+      the stage that most starves the graft. That tension is real; the slider exposes it rather than hiding it.<br>
+      &nbsp;· <b>Object-scale form shading is what works</b> — 0.34 on its own. Real paintings have modelled form
+      inside the blob, not just a lit room; shading the target like the hemisphere <code>findBlobs</code>
+      already assumes it is restores the thing the op was calibrated on.
+    </p>
+  </div>
+</div>
+
+<script type="module">
+import {FilesetResolver,FaceLandmarker}
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const $=s=>document.querySelector(s);
+const DISPW=620;                 // must match the game's canvas width
+const HARVEST_W=900;             // must match the game's harvest width
+
+/* ============================================================================
+   PORTED VERBATIM FROM anomaly-gallery.html
+   Nothing below this banner is re-implemented. If it drifts from the game the
+   experiment stops measuring anything.
+   ========================================================================== */
+const rgb2hsl=(r,g,b)=>{r/=255;g/=255;b/=255;
+  const mx=Math.max(r,g,b),mn=Math.min(r,g,b),l=(mx+mn)/2,d=mx-mn;let h=0,s=0;
+  if(d){s=l>0.5?d/(2-mx-mn):d/(mx+mn);
+    if(mx===r)h=((g-b)/d+(g<b?6:0));else if(mx===g)h=((b-r)/d+2);else h=((r-g)/d+4);h*=60;}
+  return [h,s,l];};
+const hsl2rgb=(h,s,l)=>{h=((h%360)+360)%360;
+  const c=(1-Math.abs(2*l-1))*s,x=c*(1-Math.abs((h/60)%2-1)),m=l-c/2;let r,g,b;
+  if(h<60){r=c;g=x;b=0}else if(h<120){r=x;g=c;b=0}else if(h<180){r=0;g=c;b=x}
+  else if(h<240){r=0;g=x;b=c}else if(h<300){r=x;g=0;b=c}else{r=c;g=0;b=x}
+  return [(r+m)*255,(g+m)*255,(b+m)*255];};
+
+const RING={
+  eyeR:[33,7,163,144,145,153,154,155,133,173,157,158,159,160,161,246],
+  eyeL:[362,382,381,380,374,373,390,249,263,466,388,387,386,385,384,398],
+  mouth:[61,146,91,181,84,17,314,405,321,375,291,409,270,269,267,0,37,39,40,185]
+};
+const L={mouthR:61,mouthL:291,chin:152,irisL:473,irisR:468};
+const pt=(f,i,W,H)=>({x:f[i].x*W,y:f[i].y*H});
+function faceMetrics(f,W,H){
+  let x0=1,y0=1,x1=0,y1=0;
+  for(const p of f){x0=Math.min(x0,p.x);x1=Math.max(x1,p.x);y0=Math.min(y0,p.y);y1=Math.max(y1,p.y);}
+  return {w:(x1-x0)*W,h:(y1-y0)*H,cx:(x0+x1)/2*W,cy:(y0+y1)/2*H};
+}
+
+function harvestFeature(srcCanvas,f,ringName,opt={}){
+  const {expand=1.8,tall=1.25}=opt;
+  const W=srcCanvas.width,H=srcCanvas.height;
+  const ring=RING[ringName].map(i=>({x:f[i].x*W,y:f[i].y*H}));
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9,cx=0,cy=0;
+  for(const p of ring){x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);
+    x1=Math.max(x1,p.x);y1=Math.max(y1,p.y);cx+=p.x;cy+=p.y;}
+  cx/=ring.length;cy/=ring.length;
+  const bw=(x1-x0)*expand, bh=(y1-y0)*expand*tall;
+  if(bw<8||bh<6) return null;
+  const c=document.createElement("canvas");
+  c.width=Math.round(bw);c.height=Math.round(bh);
+  const x=c.getContext("2d",{willReadFrequently:true});
+  x.drawImage(srcCanvas,cx-bw/2,cy-bh/2,bw,bh,0,0,c.width,c.height);
+  const im=x.getImageData(0,0,c.width,c.height),d=im.data;
+  for(let i=0;i<d.length;i+=4) d[i+3]=255;
+  x.putImageData(im,0,0);
+  return {canvas:c,w:c.width,h:c.height,kind:ringName};
+}
+
+function graftFeature(ctx,W,H,part,target,opt={}){
+  const {sizeRel=2.0,rot=0.05,bulge=0.42,shadeAmt=0.45,
+         crease=0.45,satKeep=1.35,coreFrac=0.55}=opt;
+  const pre=document.createElement("canvas");
+  pre.width=part.w;pre.height=part.h;
+  const pc=pre.getContext("2d",{willReadFrequently:true});
+  pc.drawImage(part.canvas,0,0);
+  {const im=pc.getImageData(0,0,part.w,part.h),d=im.data;
+   for(let i=0;i<d.length;i+=4){if(d[i+3]<4)continue;
+     const [h,s,l]=rgb2hsl(d[i],d[i+1],d[i+2]);
+     const [r,g,b]=hsl2rgb(h,Math.min(1,s*satKeep),l);
+     d[i]=r;d[i+1]=g;d[i+2]=b;}
+   pc.putImageData(im,0,0);}
+  const ew=Math.max(12,Math.round(target.r*2*sizeRel));
+  const eh=Math.max(8,Math.round(ew*(part.h/part.w)));
+  const off=document.createElement("canvas");off.width=ew;off.height=eh;
+  const ox=off.getContext("2d",{willReadFrequently:true});
+  ox.drawImage(pre,0,0,ew,eh);
+  if(bulge>0){
+    const src=ox.getImageData(0,0,ew,eh),s=src.data;
+    const out=ox.createImageData(ew,eh),o=out.data;
+    const cx=ew/2,cy=eh/2;
+    for(let y=0;y<eh;y++)for(let x=0;x<ew;x++){
+      const nx=(x-cx)/cx,ny=(y-cy)/cy,r=Math.hypot(nx,ny);
+      const k=r<1?1-bulge*(1-Math.sqrt(1-Math.min(1,r*r))):1;
+      const fx=Math.max(0,Math.min(ew-1.001,cx+nx*cx*k));
+      const fy=Math.max(0,Math.min(eh-1.001,cy+ny*cy*k));
+      const x0=fx|0,y0=fy|0,ax=fx-x0,ay=fy-y0,di=(y*ew+x)*4;
+      const x1=Math.min(ew-1,x0+1),y1=Math.min(eh-1,y0+1);
+      for(let c=0;c<4;c++){
+        const i00=(y0*ew+x0)*4+c,i10=(y0*ew+x1)*4+c,i01=(y1*ew+x0)*4+c,i11=(y1*ew+x1)*4+c;
+        o[di+c]=(s[i00]*(1-ax)+s[i10]*ax)*(1-ay)+(s[i01]*(1-ax)+s[i11]*ax)*ay;
+      }
+    }
+    ox.putImageData(out,0,0);
+  }
+  const px=Math.round(target.x-ew/2),py=Math.round(target.y-eh/2);
+  const hx=Math.max(0,Math.min(W-ew,px)),hy=Math.max(0,Math.min(H-eh,py));
+  const host=ctx.getImageData(hx,hy,ew,eh).data;
+  let hm=0,n=0;
+  for(let i=0;i<host.length;i+=4){ hm+=host[i]*0.299+host[i+1]*0.587+host[i+2]*0.114; n++; }
+  hm/=n;
+  const im=ox.getImageData(0,0,ew,eh),d=im.data;
+  const cx2=ew/2,cy2=eh/2;
+  for(let y=0;y<eh;y++)for(let x=0;x<ew;x++){
+    const i=(y*ew+x)*4;
+    const nx=(x+0.5-cx2)/cx2, ny=(y+0.5-cy2)/cy2, r=Math.hypot(nx,ny);
+    let wgt;
+    if(r<=coreFrac) wgt=1;
+    else if(r>=1) wgt=0;
+    else { const t=1-(r-coreFrac)/(1-coreFrac); wgt=t*t*(3-2*t); }
+    const hl=host[i]*0.299+host[i+1]*0.587+host[i+2]*0.114;
+    const shade=1+((hl/Math.max(1,hm))-1)*shadeAmt;
+    const k=r>0.55?Math.min(1,(r-0.55)/0.45)*crease:0;
+    for(let c=0;c<3;c++){
+      const v=d[i+c]*shade*(1-k*0.55);
+      d[i+c]=Math.max(0,Math.min(255,host[i+c]*(1-wgt)+v*wgt));
+    }
+    d[i+3]=255;
+  }
+  ox.putImageData(im,0,0);
+  ctx.save();
+  ctx.translate(target.x,target.y);ctx.rotate(rot);
+  ctx.drawImage(off,-ew/2,-eh/2);ctx.restore();
+  return [target.x-ew/2,target.y-eh/2,ew,eh];
+}
+
+function liquify(ctx,W,H,handles){
+  const src=ctx.getImageData(0,0,W,H),s=src.data;
+  const out=ctx.createImageData(W,H),o=out.data;
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    let ox=0,oy=0;
+    for(const h of handles){
+      const dx=x-h.x,dy=y-h.y,d=Math.hypot(dx,dy);
+      if(d>=h.r)continue;
+      let t=1-d/h.r;t=t*t*(3-2*t);
+      ox+=h.dx*t;oy+=h.dy*t;
+    }
+    let fx=Math.max(0,Math.min(W-1.001,x-ox)),fy=Math.max(0,Math.min(H-1.001,y-oy));
+    const x0=fx|0,y0=fy|0,ax=fx-x0,ay=fy-y0,di=(y*W+x)*4;
+    const x1=Math.min(W-1,x0+1),y1=Math.min(H-1,y0+1);
+    for(let c=0;c<3;c++){
+      const i00=(y0*W+x0)*4+c,i10=(y0*W+x1)*4+c,i01=(y1*W+x0)*4+c,i11=(y1*W+x1)*4+c;
+      o[di+c]=(s[i00]*(1-ax)+s[i10]*ax)*(1-ay)+(s[i01]*(1-ax)+s[i11]*ax)*ay;
+    }
+    o[di+3]=255;
+  }
+  ctx.putImageData(out,0,0);
+}
+function opRictus(ctx,W,H,f,k=1){
+  const m=faceMetrics(f,W,H),a=pt(f,L.mouthR,W,H),b=pt(f,L.mouthL,W,H);
+  const sp=m.w*0.075*k,lift=m.h*0.035*k,r=m.w*0.30;
+  liquify(ctx,W,H,[{x:a.x,y:a.y,dx:-sp,dy:-lift,r},{x:b.x,y:b.y,dx:sp,dy:-lift,r}]);
+  const x0=Math.min(a.x,b.x)-r*0.6,y0=Math.min(a.y,b.y)-r*0.55;
+  return [x0,y0,Math.abs(b.x-a.x)+r*1.2,r*1.1];
+}
+function opDrift(ctx,W,H,f,k=1){
+  const m=faceMetrics(f,W,H),e=pt(f,L.irisL,W,H),r=m.w*0.50;
+  const dx=m.w*0.024*k, dy=m.h*0.030*k;
+  liquify(ctx,W,H,[{x:e.x,y:e.y,dx,dy,r}]);
+  const hw=m.w*0.16;
+  return [e.x+dx-hw,e.y+dy-hw,hw*2,hw*2];
+}
+function opElongate(ctx,W,H,f,k=1){
+  const m=faceMetrics(f,W,H),c=pt(f,L.chin,W,H),r=m.h*0.38;
+  const dy=m.h*0.13*k;
+  liquify(ctx,W,H,[{x:c.x,y:c.y,dx:0,dy,r}]);
+  return [c.x-r*0.7,c.y-r*0.65,r*1.4,r*1.3+dy*0.6];
+}
+
+function findBlobs(ctx,W,H,pred,box={},opt={}){
+  const {x0=0,y0=0,x1=W,y1=H}=box;
+  const {n=6,minR=8,close=5}=opt;
+  const d=ctx.getImageData(0,0,W,H).data;
+  let bin=new Float32Array(W*H);
+  for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){
+    const k=(y*W+x)*4;
+    bin[y*W+x]=pred(d[k],d[k+1],d[k+2])?1:0;
+  }
+  if(close>0){
+    const tmp=new Float32Array(W*H), out=new Float32Array(W*H), win=close*2+1;
+    for(let y=y0;y<y1;y++){ let s=0;
+      for(let x=x0;x<x1;x++){ s+=bin[y*W+x];
+        if(x-x0>=win) s-=bin[y*W+x-win];
+        tmp[y*W+Math.max(x0,x-close)]=s/win; } }
+    for(let x=x0;x<x1;x++){ let s=0;
+      for(let y=y0;y<y1;y++){ s+=tmp[y*W+x];
+        if(y-y0>=win) s-=tmp[(y-win)*W+x];
+        out[Math.max(y0,y-close)*W+x]=s/win; } }
+    for(let i=0;i<W*H;i++) bin[i]=out[i]>0.42?1:0;
+  }
+  const m=new Float32Array(W*H);
+  for(let i=0;i<W*H;i++) m[i]=bin[i]?Infinity:0;
+  for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){
+    const i=y*W+x;if(m[i]===0)continue;
+    let v=m[i];
+    if(x>x0)v=Math.min(v,m[i-1]+1);
+    if(y>y0)v=Math.min(v,m[i-W]+1);
+    if(x>x0&&y>y0)v=Math.min(v,m[i-W-1]+1.414);
+    if(x<x1-1&&y>y0)v=Math.min(v,m[i-W+1]+1.414);
+    m[i]=v;
+  }
+  const cand=[];
+  for(let y=y1-1;y>=y0;y--)for(let x=x1-1;x>=x0;x--){
+    const i=y*W+x;if(m[i]===0)continue;
+    let v=m[i];
+    if(x<x1-1)v=Math.min(v,m[i+1]+1);
+    if(y<y1-1)v=Math.min(v,m[i+W]+1);
+    if(x<x1-1&&y<y1-1)v=Math.min(v,m[i+W+1]+1.414);
+    if(x>x0&&y<y1-1)v=Math.min(v,m[i+W-1]+1.414);
+    m[i]=v;
+    if(v>=minR) cand.push({x,y,r:v});
+  }
+  cand.sort((a,b)=>b.r-a.r);
+  const keep=[];
+  for(const c of cand){
+    if(keep.some(k=>Math.hypot(k.x-c.x,k.y-c.y)<k.r)) continue;
+    keep.push({x:c.x,y:c.y,r:Math.round(c.r)});
+    if(keep.length>=n) break;
+  }
+  return keep;
+}
+const warmMass=(r,g,b)=>{const [h,s,l]=rgb2hsl(r,g,b);
+  return (h<44||h>330)&&s>0.38&&l>0.18&&l<0.78;};
+const anyMass=(r,g,b)=>{const [h,s,l]=rgb2hsl(r,g,b);
+  return s>0.22&&l>0.16&&l<0.82;};
+function validBlob(b,box){
+  if(!b) return null;
+  const clear=Math.max(6,b.r*0.8);
+  if(b.x-clear<box.x0||b.x+clear>box.x1||b.y-clear<box.y0||b.y+clear>box.y1) return null;
+  return b;
+}
+function fitGraft(blobR,aspect,minPx,maxPx){
+  const halfDiag=Math.sqrt(1+aspect*aspect)/2;
+  const maxW=(blobR*0.94)/halfDiag;
+  const w=Math.min(maxW,maxPx);
+  if(w<minPx) return null;
+  return w/(blobR*2);
+}
+/* ====================== END OF PORTED CODE ====================== */
+
+
+/* ============================================================================
+   THE PAINTERLY PASS — the only new image code in this file.
+   Six stages, each independently disableable, run in this order. The ordering
+   is not arbitrary: abstraction must see clean pixels, and grain and cracks
+   must be laid down last or the abstraction will smooth them away.
+   ========================================================================== */
+
+/* 1 — Kuwahara. The classic paint-abstraction operator: each pixel becomes the
+   mean of whichever of its four overlapping quadrants has the lowest luminance
+   variance. Flat regions flatten, edges stay hard — which is what separates it
+   from a blur and what makes the result read as brushwork rather than as a
+   photo out of focus.
+   Implemented over summed-area tables so cost is O(W·H) and independent of
+   radius; the naive form is O(W·H·r²) and makes the slider unusable. */
+function kuwahara(ctx,W,H,r){
+  if(r<1) return;
+  const im=ctx.getImageData(0,0,W,H), s=im.data;
+  const w1=W+1, n1=w1*(H+1);
+  const iR=new Float64Array(n1),iG=new Float64Array(n1),iB=new Float64Array(n1),
+        iL=new Float64Array(n1),iL2=new Float64Array(n1);
+  for(let y=0;y<H;y++){
+    let rR=0,rG=0,rB=0,rL=0,rL2=0;
+    for(let x=0;x<W;x++){
+      const k=(y*W+x)*4, R=s[k],G=s[k+1],B=s[k+2];
+      const Lm=R*0.299+G*0.587+B*0.114;
+      rR+=R;rG+=G;rB+=B;rL+=Lm;rL2+=Lm*Lm;
+      const i=(y+1)*w1+(x+1), p=y*w1+(x+1);
+      iR[i]=iR[p]+rR; iG[i]=iG[p]+rG; iB[i]=iB[p]+rB;
+      iL[i]=iL[p]+rL; iL2[i]=iL2[p]+rL2;
+    }
+  }
+  const sum=(I,x0,y0,x1,y1)=>I[y1*w1+x1]-I[y0*w1+x1]-I[y1*w1+x0]+I[y0*w1+x0];
+  const out=ctx.createImageData(W,H), o=out.data;
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    let best=Infinity,bR=0,bG=0,bB=0;
+    for(let q=0;q<4;q++){
+      const x0=Math.max(0,(q&1)?x:x-r), x1=Math.min(W,(q&1)?x+r+1:x+1);
+      const y0=Math.max(0,(q&2)?y:y-r), y1=Math.min(H,(q&2)?y+r+1:y+1);
+      const n=(x1-x0)*(y1-y0); if(n<=0) continue;
+      const sL=sum(iL,x0,y0,x1,y1)/n;
+      const v=sum(iL2,x0,y0,x1,y1)/n - sL*sL;
+      if(v<best){ best=v;
+        bR=sum(iR,x0,y0,x1,y1)/n; bG=sum(iG,x0,y0,x1,y1)/n; bB=sum(iB,x0,y0,x1,y1)/n; }
+    }
+    const k=(y*W+x)*4;
+    o[k]=bR;o[k+1]=bG;o[k+2]=bB;o[k+3]=255;
+  }
+  ctx.putImageData(out,0,0);
+}
+
+/* 2 — Posterise in HSL lightness only, so hue and saturation survive. Kept
+   mild by default: aggressive quantisation flattens exactly the local detail a
+   graft needs in order to read as a feature rather than as a blotch. */
+function posterise(ctx,W,H,levels){
+  if(levels>=40) return;
+  const im=ctx.getImageData(0,0,W,H),d=im.data;
+  for(let i=0;i<d.length;i+=4){
+    const [h,s,l]=rgb2hsl(d[i],d[i+1],d[i+2]);
+    const q=Math.round(l*(levels-1))/(levels-1);
+    const [r,g,b]=hsl2rgb(h,s,q);
+    d[i]=r;d[i+1]=g;d[i+2]=b;
+  }
+  ctx.putImageData(im,0,0);
+}
+
+/* 3 — Warm the shadows. Old-master shadows are warm browns and never neutral
+   black; a photograph's shadows are whatever colour temperature the sensor
+   recorded, often blue. Weighted to the dark end so highlights keep their hue.
+   This is also what makes shadowTone()'s "never black" assumption true again. */
+function warmShadows(ctx,W,H,amt){
+  if(amt<=0) return;
+  const im=ctx.getImageData(0,0,W,H),d=im.data;
+  for(let i=0;i<d.length;i+=4){
+    let [h,s,l]=rgb2hsl(d[i],d[i+1],d[i+2]);
+    const wgt=Math.pow(1-Math.min(1,l/0.62),2)*amt;
+    if(wgt>0.001){
+      const dh=((28-h+540)%360)-180;         // shortest path to a warm brown
+      h=h+dh*wgt*0.80;
+      s=s+(0.34-s)*wgt*0.70;
+      l=l*(1-wgt*0.10);
+    }
+    const [r,g,b]=hsl2rgb(h,s,l);
+    d[i]=r;d[i+1]=g;d[i+2]=b;
+  }
+  ctx.putImageData(im,0,0);
+}
+
+/* 4 — S-curve contrast. Raises local luminance variance, which is the raw
+   material the graft's shading multiply consumes. */
+function contrast(ctx,W,H,amt){
+  if(amt<=0.001) return;
+  const lut=new Uint8ClampedArray(256);
+  for(let v=0;v<256;v++){
+    const t=v/255, sc=t*t*(3-2*t);
+    lut[v]=Math.max(0,Math.min(255,(t+(sc-t)*amt)*255));
+  }
+  const im=ctx.getImageData(0,0,W,H),d=im.data;
+  for(let i=0;i<d.length;i+=4){ d[i]=lut[d[i]];d[i+1]=lut[d[i+1]];d[i+2]=lut[d[i+2]]; }
+  ctx.putImageData(im,0,0);
+}
+
+/* 5 — Chiaroscuro. THE functional stage, not a cosmetic one.
+   graftFeature shades every pixel by hostLum/hostMean. Under flat lighting that
+   ratio sits at ~1.0 everywhere, the multiply becomes the identity, and the
+   graft stops obeying the surface it is sitting on — the single biggest reason
+   a painting-tuned graft looks pasted onto a photograph. This manufactures the
+   directional falloff the op was calibrated against. */
+function chiaroscuro(ctx,W,H,amt,angleDeg){
+  if(amt<=0) return;
+  const a=angleDeg*Math.PI/180, lx=Math.cos(a), ly=Math.sin(a);
+  const cx=W/2, cy=H/2, R=Math.hypot(cx,cy);
+  const im=ctx.getImageData(0,0,W,H),d=im.data;
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    const nx=(x-cx)/R, ny=(y-cy)/R;
+    const proj=nx*lx+ny*ly, rad=nx*nx+ny*ny;
+    const k=1 + proj*0.55*amt - rad*0.45*amt;
+    const i=(y*W+x)*4;
+    d[i]  =Math.max(0,Math.min(255,d[i]  *k));
+    d[i+1]=Math.max(0,Math.min(255,d[i+1]*k));
+    d[i+2]=Math.max(0,Math.min(255,d[i+2]*k));
+  }
+  ctx.putImageData(im,0,0);
+}
+
+/* 6a — Canvas grain. Not white noise: a weave component plus a random one, so
+   it reads as linen under paint rather than as sensor noise or film grain. */
+function grain(ctx,W,H,amt){
+  if(amt<=0) return;
+  const im=ctx.getImageData(0,0,W,H),d=im.data;
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    const weave=(Math.sin(x*1.7)+Math.sin(y*1.9))*3.2;
+    const n=((Math.random()*2-1)*17+weave)*amt;
+    const i=(y*W+x)*4;
+    d[i]  =Math.max(0,Math.min(255,d[i]  +n));
+    d[i+1]=Math.max(0,Math.min(255,d[i+1]+n));
+    d[i+2]=Math.max(0,Math.min(255,d[i+2]+n));
+  }
+  ctx.putImageData(im,0,0);
+}
+
+/* 6b — Craquelure as a Worley/cellular network: darken where the two nearest
+   jittered seed points are near-equidistant, i.e. on the cell boundaries. This
+   is the stage that buys back the free concealment paintings have and photos
+   do not — cracks and varnish texture hide graft seams at no cost. */
+function craquelure(ctx,W,H,amt){
+  if(amt<=0) return;
+  const cell=26, cols=Math.ceil(W/cell)+2, rows=Math.ceil(H/cell)+2;
+  const px=new Float32Array(cols*rows), py=new Float32Array(cols*rows);
+  for(let j=0;j<rows;j++)for(let i=0;i<cols;i++){
+    const k=j*cols+i;
+    px[k]=(i-1+Math.random())*cell; py[k]=(j-1+Math.random())*cell;
+  }
+  const im=ctx.getImageData(0,0,W,H),d=im.data;
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    const ci=Math.floor(x/cell)+1, cj=Math.floor(y/cell)+1;
+    let d1=1e9,d2=1e9;
+    for(let j=cj-1;j<=cj+1;j++)for(let i=ci-1;i<=ci+1;i++){
+      if(i<0||j<0||i>=cols||j>=rows) continue;
+      const k=j*cols+i, dx=px[k]-x, dy=py[k]-y, dd=dx*dx+dy*dy;
+      if(dd<d1){ d2=d1; d1=dd; } else if(dd<d2) d2=dd;
+    }
+    const edge=Math.sqrt(d2)-Math.sqrt(d1);
+    if(edge<1.15){
+      const f=1-(1-edge/1.15)*0.42*amt, i=(y*W+x)*4;
+      d[i]*=f; d[i+1]*=f; d[i+2]*=f;
+    }
+  }
+  ctx.putImageData(im,0,0);
+}
+
+/* 7 — Object-scale form shading at the graft target.
+   MEASURED, and it overturns the obvious guess. Across 29 real still lifes the
+   shade multiply spans 0.28–1.13 (median 0.60) over a real graft footprint. A
+   flat photo spans 0.03. Global chiaroscuro barely closes that: a 50px
+   footprint is 8% of a 620px canvas, so a whole-image gradient hardly varies
+   across it — max strength moved a synthetic photo from 0.063 to 0.068.
+
+   What real paintings have at that scale is MODELLED FORM: the target is a
+   painted apple, with a highlight, a terminator and a shadowed side, all inside
+   the blob. So shade the blob like the lit hemisphere findBlobs already assumes
+   it is. One local operation reaches 0.34 on its own — in band, where every
+   global stage combined does not get halfway. */
+function formShade(ctx,W,H,target,amt,angleDeg){
+  if(amt<=0||!target) return;
+  const a=angleDeg*Math.PI/180, lx=Math.cos(a), ly=Math.sin(a), lz=0.62;
+  const nrm=Math.hypot(lx,ly,lz);
+  const {x:cx,y:cy,r}=target, R=r*1.12;
+  const x0=Math.max(0,Math.floor(cx-R)), x1=Math.min(W,Math.ceil(cx+R));
+  const y0=Math.max(0,Math.floor(cy-R)), y1=Math.min(H,Math.ceil(cy+R));
+  if(x1<=x0||y1<=y0) return;
+  const WW=x1-x0, im=ctx.getImageData(x0,y0,WW,y1-y0), d=im.data;
+  for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){
+    const nx=(x-cx)/r, ny=(y-cy)/r, dd=Math.hypot(nx,ny);
+    if(dd>1.12) continue;
+    const nz=Math.sqrt(Math.max(0,1-Math.min(1,dd*dd)));   // hemisphere normal
+    const lam=(nx*lx+ny*ly+nz*lz)/nrm;
+    const edge=dd<=1?1:1-(dd-1)/0.12;                      // soft rim, no hard disc
+    const k=1+lam*amt*edge;
+    const i=((y-y0)*WW+(x-x0))*4;
+    d[i]  =Math.max(0,Math.min(255,d[i]  *k));
+    d[i+1]=Math.max(0,Math.min(255,d[i+1]*k));
+    d[i+2]=Math.max(0,Math.min(255,d[i+2]*k));
+  }
+  ctx.putImageData(im,x0,y0);
+}
+
+function painterly(ctx,W,H,P){
+  const t={};
+  let t0=performance.now(); kuwahara(ctx,W,H,P.kuwahara);            t.kuwahara=performance.now()-t0;
+  t0=performance.now();     posterise(ctx,W,H,P.posterise);          t.posterise=performance.now()-t0;
+  t0=performance.now();     warmShadows(ctx,W,H,P.warmth);           t.warmth=performance.now()-t0;
+  t0=performance.now();     contrast(ctx,W,H,P.contrast);            t.contrast=performance.now()-t0;
+  t0=performance.now();     chiaroscuro(ctx,W,H,P.chiaro,P.lightAngle); t.chiaro=performance.now()-t0;
+  t0=performance.now();     grain(ctx,W,H,P.grain);                  t.grain=performance.now()-t0;
+  t0=performance.now();     craquelure(ctx,W,H,P.cracks);            t.cracks=performance.now()-t0;
+  return t;
+}
+
+/* The exact multiply from graftFeature, measured across a footprint before any
+   graft is drawn. Reports the range the shading term can actually reach. */
+function shadeRange(ctx,box,shadeAmt=0.45){
+  const [bx,by,bw,bh]=box;
+  const X=Math.max(0,Math.round(bx)), Y=Math.max(0,Math.round(by));
+  const W=Math.min(ctx.canvas.width-X,Math.round(bw));
+  const H=Math.min(ctx.canvas.height-Y,Math.round(bh));
+  if(W<=0||H<=0) return null;
+  const host=ctx.getImageData(X,Y,W,H).data;
+  let hm=0,n=0;
+  for(let i=0;i<host.length;i+=4){ hm+=host[i]*0.299+host[i+1]*0.587+host[i+2]*0.114; n++; }
+  hm/=n;
+  let lo=Infinity,hi=-Infinity;
+  for(let i=0;i<host.length;i+=4){
+    const hl=host[i]*0.299+host[i+1]*0.587+host[i+2]*0.114;
+    const sh=1+((hl/Math.max(1,hm))-1)*shadeAmt;
+    if(sh<lo)lo=sh; if(sh>hi)hi=sh;
+  }
+  return {lo,hi,spread:hi-lo};
+}
+
+
+/* ============================================================================
+   LAB PLUMBING
+   ========================================================================== */
+const SLIDERS=[
+  {k:"kuwahara",  label:"Kuwahara", min:0,  max:10, step:1,    v:4,   fmt:v=>v+"px"},
+  {k:"posterise", label:"Posterise",min:4,  max:40, step:1,    v:40,  fmt:v=>v>=40?"off":v+" lv"},
+  {k:"warmth",    label:"Warm shad",min:0,  max:1,  step:0.05, v:0.55,fmt:v=>v.toFixed(2)},
+  {k:"contrast",  label:"Contrast", min:0,  max:1,  step:0.05, v:0.40,fmt:v=>v.toFixed(2)},
+  {k:"chiaro",    label:"Chiaroscuro",min:0,max:1,  step:0.05, v:0.45,fmt:v=>v.toFixed(2)},
+  {k:"form",      label:"Form shade",min:0, max:1,  step:0.05, v:0.45,fmt:v=>v.toFixed(2)},
+  {k:"lightAngle",label:"Light ang",min:0,  max:359,step:5,    v:225, fmt:v=>v+"°"},
+  {k:"grain",     label:"Grain",    min:0,  max:1,  step:0.05, v:0.40,fmt:v=>v.toFixed(2)},
+  {k:"cracks",    label:"Craquelure",min:0, max:1,  step:0.05, v:0.40,fmt:v=>v.toFixed(2)}
+];
+/* "full" is not "every slider up". Kuwahara is measured to SUPPRESS shade
+   spread (0.063 -> 0.023 on a synthetic photo) because it flattens exactly the
+   local variation the graft's multiply consumes — so the preset that has to
+   make grafts land keeps it low and spends its budget on form shading. */
+const PRESETS={
+  off:    {kuwahara:0,posterise:40,warmth:0,   contrast:0,   chiaro:0,   form:0,   lightAngle:225,grain:0,   cracks:0},
+  subtle: {kuwahara:2,posterise:40,warmth:0.30,contrast:0.22,chiaro:0.25,form:0.25,lightAngle:225,grain:0.22,cracks:0.18},
+  full:   {kuwahara:3,posterise:22,warmth:0.70,contrast:0.50,chiaro:0.60,form:0.45,lightAngle:225,grain:0.40,cracks:0.40}
+};
+const P={};
+function buildSliders(){
+  const host=$("#sliders"); host.innerHTML="";
+  for(const s of SLIDERS){
+    P[s.k]=s.v;
+    const row=document.createElement("div"); row.className="sl";
+    row.innerHTML=`<label>${s.label}</label>
+      <input type="range" min="${s.min}" max="${s.max}" step="${s.step}" value="${s.v}" data-k="${s.k}">
+      <span>${s.fmt(s.v)}</span>`;
+    const inp=row.querySelector("input"), out=row.querySelector("span");
+    inp.addEventListener("input",()=>{ P[s.k]=+inp.value; out.textContent=s.fmt(+inp.value); });
+    host.appendChild(row);
+  }
+}
+function applyPreset(name){
+  const p=PRESETS[name]; if(!p) return;
+  for(const s of SLIDERS){
+    if(!(s.k in p)) continue;
+    P[s.k]=p[s.k];
+    const inp=$(`#sliders input[data-k="${s.k}"]`);
+    inp.value=p[s.k]; inp.nextElementSibling.textContent=s.fmt(p[s.k]);
+  }
+}
+
+let FL=null;
+async function landmarker(){
+  if(FL) return FL;
+  const fs=await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  FL=await FaceLandmarker.createFromOptions(fs,{
+    baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"},
+    runningMode:"IMAGE",numFaces:1});
+  return FL;
+}
+
+let MANIFEST=null, LOCAL=null;   // LOCAL = {bitmap, name} from a chosen file
+async function getManifest(){
+  if(MANIFEST!==null) return MANIFEST;
+  try{
+    const r=await fetch("assets/manifest.json",{cache:"no-cache"});
+    if(!r.ok) throw 0;
+    const m=await r.json();
+    MANIFEST=(m.items&&m.items.length)?m:false;
+  }catch(e){ MANIFEST=false; }
+  return MANIFEST;
+}
+async function populateSources(){
+  const m=await getManifest(), sel=$("#src");
+  sel.innerHTML="";
+  if(!m){
+    sel.innerHTML='<option value="">no manifest — use a local file</option>';
+    return;
+  }
+  const usable=m.items.filter(i=>i.usable!==false);
+  for(const it of usable.slice(0,120)){
+    const o=document.createElement("option");
+    o.value=it.file;
+    o.textContent=`${it.hasFace?"face ":"still"} · ${it.artist} — ${it.name}`.slice(0,72);
+    sel.appendChild(o);
+  }
+  msg(`${usable.length} paintings available`);
+}
+
+const msg=t=>{ $("#msg").textContent=t; };
+const mkCanvas=(el,W,H)=>{ el.width=W; el.height=H;
+  return el.getContext("2d",{willReadFrequently:true}); };
+
+async function loadSource(){
+  if(LOCAL){
+    const b=LOCAL.bitmap;
+    const H=Math.round(b.height*(DISPW/b.width));
+    return {draw:(ctx,w,h)=>ctx.drawImage(b,0,0,w,h), W:DISPW, H,
+            full:b, fullW:b.width, fullH:b.height, label:LOCAL.name};
+  }
+  const file=$("#src").value;
+  if(!file) throw new Error("Pick a painting or choose a local file.");
+  const img=await new Promise((res,rej)=>{
+    const i=new Image(); i.crossOrigin="anonymous";
+    i.onload=()=>res(i); i.onerror=()=>rej(new Error("could not load "+file));
+    i.src="assets/"+file;
+  });
+  const H=Math.round(img.height*(DISPW/img.width));
+  return {draw:(ctx,w,h)=>ctx.drawImage(img,0,0,w,h), W:DISPW, H,
+          full:img, fullW:img.width, fullH:img.height, label:file};
+}
+
+/* Donor: prefer the source's own face (for a photo, your own eye on your own
+   surface is the interesting case). Fall back to the first portrait in the
+   manifest so graft modes still run on a source with no face in it. */
+async function getDonor(src,face,fl){
+  if(face){
+    const hh=Math.round(src.fullH*(HARVEST_W/src.fullW));
+    const hc=document.createElement("canvas"); hc.width=HARVEST_W; hc.height=hh;
+    hc.getContext("2d",{willReadFrequently:true}).drawImage(src.full,0,0,HARVEST_W,hh);
+    const res=fl.detect(hc);
+    if(res.faceLandmarks&&res.faceLandmarks.length)
+      return {canvas:hc,face:res.faceLandmarks[0],from:"source itself"};
+  }
+  const m=await getManifest();
+  if(!m) return null;
+  const cand=m.items.find(i=>i.usable!==false&&i.hasFace);
+  if(!cand) return null;
+  const img=await new Promise((res,rej)=>{
+    const i=new Image(); i.onload=()=>res(i); i.onerror=()=>rej(new Error("donor load failed"));
+    i.src="assets/"+cand.file;
+  });
+  const hh=Math.round(img.height*(HARVEST_W/img.width));
+  const hc=document.createElement("canvas"); hc.width=HARVEST_W; hc.height=hh;
+  hc.getContext("2d",{willReadFrequently:true}).drawImage(img,0,0,HARVEST_W,hh);
+  const res=fl.detect(hc);
+  if(!res.faceLandmarks||!res.faceLandmarks.length) return null;
+  return {canvas:hc,face:res.faceLandmarks[0],from:cand.name};
+}
+
+/* Apply the chosen op to a context using PRE-CACHED geometry, so panel 2 and
+   panel 4 differ only by the painterly pass. */
+function applyOp(ctx,W,H,mode,geo){
+  if(mode==="rictus")   return geo.face?opRictus(ctx,W,H,geo.face,1.0):null;
+  if(mode==="drift")    return geo.face?opDrift(ctx,W,H,geo.face,4.0):null;
+  if(mode==="elongate") return geo.face?opElongate(ctx,W,H,geo.face,1.5):null;
+  if(!geo.part||!geo.target) return null;
+  return graftFeature(ctx,W,H,geo.part,geo.target,{
+    sizeRel:geo.sizeRel,rot:geo.rot,bulge:0.42,shadeAmt:0.45,
+    crease:0.45,satKeep:1.35,coreFrac:0.55});
+}
+
+async function run(){
+  $("#run").disabled=true;
+  $("#verdict").innerHTML=""; $("#stats").innerHTML="";
+  const T={};
+  try{
+    msg("loading landmarker…");
+    let t0=performance.now();
+    const fl=await landmarker();
+    T.landmarkerBoot=performance.now()-t0;
+
+    msg("loading source…");
+    const src=await loadSource();
+    const {W,H}=src;
+
+    const A=mkCanvas($("#cA"),W,H), B=mkCanvas($("#cB"),W,H),
+          C=mkCanvas($("#cC"),W,H), D=mkCanvas($("#cD"),W,H);
+    for(const ctx of [A,B,C,D]) src.draw(ctx,W,H);
+
+    /* --- detection on the ORIGINAL, once, cached --- */
+    msg("detecting…");
+    t0=performance.now();
+    const res=fl.detect(A.canvas);
+    T.detect=performance.now()-t0;
+    const face=(res.faceLandmarks&&res.faceLandmarks[0])||null;
+
+    /* --- blob targeting on the ORIGINAL, same box rule as the game --- */
+    t0=performance.now();
+    let box={x0:Math.round(W*0.16),y0:Math.round(H*0.30),
+             x1:Math.round(W*0.84),y1:Math.round(H*0.88)};
+    if(face){
+      const m=faceMetrics(face,W,H);
+      box.y0=Math.max(box.y0,Math.round(m.cy+m.h*0.55));
+      if(box.y1-box.y0<50) box={x0:Math.round(W*0.16),y0:Math.round(H*0.55),
+                                x1:Math.round(W*0.84),y1:Math.round(H*0.90)};
+    }
+    let blobs=findBlobs(A,W,H,warmMass,box,{n:6}).map(b=>validBlob(b,box)).filter(Boolean);
+    if(blobs.length<2){
+      for(const c of findBlobs(A,W,H,anyMass,box,{n:6}).map(b=>validBlob(b,box)).filter(Boolean))
+        if(!blobs.some(k=>Math.hypot(k.x-c.x,k.y-c.y)<Math.max(k.r,c.r))) blobs.push(c);
+    }
+    blobs.sort((a,b)=>b.r-a.r);
+    T.target=performance.now()-t0;
+
+    const mode=$("#op").value;
+    const geo={face,rot:(Math.random()-0.5)*0.30};
+
+    let donorFrom="—";
+    if(mode.startsWith("graft")){
+      msg("harvesting…");
+      t0=performance.now();
+      const donor=await getDonor(src,face,fl);
+      if(!donor) throw new Error("No face anywhere to harvest from — graft modes need a donor. Pick a face op, or a source with a face.");
+      donorFrom=donor.from;
+      const want=mode==="graftMouth"?"mouth":"eye";
+      const rings=want==="mouth"?["mouth"]:["eyeL","eyeR"];
+      let part=null;
+      for(const r of rings){
+        part=harvestFeature(donor.canvas,donor.face,r,
+          {expand:r==="mouth"?1.5:1.8,tall:r==="mouth"?1.1:1.25});
+        if(part) break;
+      }
+      if(!part) throw new Error("Harvest failed — the donor's feature is too small at 900px.");
+      geo.part=part;
+      T.harvest=performance.now()-t0;
+
+      const aspect=part.h/part.w;
+      for(const b of blobs){
+        const s=fitGraft(b.r,aspect,W*0.055,W*0.14);
+        if(s){ geo.target=b; geo.sizeRel=s*(part.kind==="mouth"?0.9:1); break; }
+      }
+      if(!geo.target) throw new Error(`No blob can host a graft. Best radius found: ${blobs[0]?blobs[0].r:0}px; needs about ${Math.ceil(W*0.055/2/0.94*Math.sqrt(1+aspect*aspect))}px.`);
+    }else if(!face){
+      throw new Error("No face detected — the three warp ops need one. Try a graft op, or a source with a larger, more frontal face.");
+    }
+
+    /* --- panel 2: control, op on the raw source --- */
+    msg("running op (control)…");
+    t0=performance.now();
+    const boxB=applyOp(B,W,H,mode,geo);
+    T.opControl=performance.now()-t0;
+
+    /* --- shade spread BEFORE the pass, over the graft footprint --- */
+    const foot=geo.target
+      ? [geo.target.x-(geo.target.r*2*geo.sizeRel)/2, geo.target.y-(geo.target.r*2*geo.sizeRel*(geo.part.h/geo.part.w))/2,
+         geo.target.r*2*geo.sizeRel, geo.target.r*2*geo.sizeRel*(geo.part.h/geo.part.w)]
+      : boxB;
+    const shBefore=foot?shadeRange(A,foot):null;
+
+    /* --- panel 3: the pass --- */
+    msg("painterly pass…");
+    t0=performance.now();
+    const tp=painterly(C,W,H,P);
+    if(geo.target&&P.form>0){
+      const tf=performance.now();
+      formShade(C,W,H,geo.target,P.form,P.lightAngle);
+      tp.formShade=performance.now()-tf;
+    }
+    T.painterly=performance.now()-t0;
+    D.drawImage(C.canvas,0,0);
+
+    const shAfter=foot?shadeRange(C,foot):null;
+
+    /* --- panel 4: same op, same geometry, on the painterly version --- */
+    msg("running op (test)…");
+    t0=performance.now();
+    applyOp(D,W,H,mode,geo);
+    T.opTest=performance.now()-t0;
+
+    /* ---------------- report ---------------- */
+    const row=(k,v,cls="")=>`<tr><th>${k}</th><td class="n ${cls}">${v}</td></tr>`;
+    const ms=v=>v==null?"—":v.toFixed(1)+" ms";
+    $("#stats").innerHTML=
+      `<tr><th>source</th><td class="n">${src.label}${LOCAL?" (local, not uploaded)":""}</td></tr>`
+    + row("canvas",`${W} × ${H}`)
+    + row("face detected",face?"yes":"no",face?"":"bad")
+    + row("blob candidates",blobs.length,blobs.length?"":"bad")
+    + row("best blob radius",blobs[0]?blobs[0].r+" px":"—")
+    + row("graft donor",donorFrom)
+    + (geo.target?row("graft target",`r=${geo.target.r}px  sizeRel=${geo.sizeRel.toFixed(2)}  drawn≈${Math.round(geo.target.r*2*geo.sizeRel)}px`):"")
+    + row("— timings —","")
+    + row("landmarker boot",ms(T.landmarkerBoot))
+    + row("detect",ms(T.detect))
+    + row("targeting",ms(T.target))
+    + (T.harvest?row("harvest",ms(T.harvest)):"")
+    + row("op (control)",ms(T.opControl))
+    + row("op (test)",ms(T.opTest))
+    + row("painterly total",ms(T.painterly))
+    + Object.entries(tp).map(([k,v])=>row("  · "+k,ms(v))).join("");
+
+    if(shBefore&&shAfter){
+      const b=shBefore.spread, a=shAfter.spread;
+      /* Empirical band, measured over 29 vendored still lifes at their own live
+         findBlobs targets and real fitGraft sizes. This is what the graft op was
+         calibrated against, so it is the bar — not a guess. */
+      const P10=0.304, MED=0.604, P75=0.695;
+      const verdict=a>=P10
+        ? (a<=P75?"<b>— in the real-painting band</b>":"— above the band, likely over-modelled")
+        : (a>b*1.5?"— improved, still below the band":"<i>— not close; the pass is not doing the work</i>");
+      $("#verdict").innerHTML=
+        `<div class="verdict">
+           shade multiply across the graft footprint — the term inside
+           <code>graftFeature</code> that makes a graft sit <em>in</em> the surface<br><br>
+           real paintings&nbsp; p10 <b>${P10.toFixed(3)}</b> · median <b>${MED.toFixed(3)}</b> · p75 <b>${P75.toFixed(3)}</b>
+             &nbsp;<span style="color:#6d6455">(n=29 vendored still lifes)</span><br>
+           this source&nbsp;&nbsp;&nbsp;&nbsp; ${shBefore.lo.toFixed(3)} … ${shBefore.hi.toFixed(3)}
+             &nbsp;(spread <b>${b.toFixed(3)}</b>)${b<0.10?' <i>— degenerate, multiply is near-identity</i>':""}<br>
+           after pass&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${shAfter.lo.toFixed(3)} … ${shAfter.hi.toFixed(3)}
+             &nbsp;(spread <b>${a.toFixed(3)}</b>) ${verdict}<br><br>
+           ratio ${b>0?(a/b).toFixed(2)+"×":"—"}
+           &nbsp;<span style="color:#6d6455">· grain and craquelure also raise this number, but
+           as speckle rather than form — judge those two by eye, not by the metric</span>
+         </div>`;
+    }
+    msg("done");
+  }catch(e){
+    msg("");
+    $("#verdict").innerHTML=`<div class="verdict"><i>${String(e.message||e)}</i></div>`;
+  }finally{
+    $("#run").disabled=false;
+  }
+}
+
+/* ---- local file: object URL only, never uploaded, revoked immediately ---- */
+$("#pick").addEventListener("click",()=>$("#file").click());
+$("#file").addEventListener("change",async ev=>{
+  const f=ev.target.files&&ev.target.files[0];
+  if(!f) return;
+  try{
+    // from-image honours EXIF orientation, so portrait phone photos are upright
+    const bmp=await createImageBitmap(f,{imageOrientation:"from-image"});
+    LOCAL={bitmap:bmp,name:f.name};
+    $("#src").value="";
+    msg(`local file: ${f.name} · ${bmp.width}×${bmp.height} · stays in this tab`);
+  }catch(e){ msg("could not decode that file"); }
+  ev.target.value="";
+});
+$("#src").addEventListener("change",()=>{ if($("#src").value) LOCAL=null; });
+$("#run").addEventListener("click",run);
+for(const b of document.querySelectorAll("[data-preset]"))
+  b.addEventListener("click",()=>applyPreset(b.dataset.preset));
+
+buildSliders();
+populateSources();
+</script>
+</body>
+</html>

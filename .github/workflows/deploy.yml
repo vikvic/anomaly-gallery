@@ -33,9 +33,13 @@ jobs:
       - name: Check required pages exist
         run: |
           set -e
-          for f in index.html ops-lab.html eye-graft.html; do
+          for f in index.html labs.html ops-lab.html eye-graft.html painterly-lab.html curate.html; do
             test -f "$f" || { echo "::error::missing $f"; exit 1; }
           done
+          # index.html must BE the game, not the landing page. These two moved
+          # past each other once already and the rename was only half done.
+          grep -q "FaceLandmarker" index.html \
+            || { echo "::error::index.html is not the game — did labs.html and index.html get swapped?"; exit 1; }
 
       # The game falls back to the live Commons API when no manifest is present,
       # and Commons rate-limits hard. Warn loudly rather than shipping that.

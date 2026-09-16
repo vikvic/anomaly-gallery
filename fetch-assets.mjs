@@ -15,7 +15,7 @@
  *
  * MEASURED SIZES (avg over 12 paintings):
  *    800px → 208 KB      1000px → 391 KB      1400px → 879 KB
- * 1000px is the right master: the game canvas is 470px, but eye harvesting
+ * 1000px is the right master: the game canvas is 620px, but eye harvesting
  * samples at 900px and wants the detail.
  *
  * YIELD: face detection fires on roughly 64% of search results for "portrait
