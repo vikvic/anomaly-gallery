@@ -115,6 +115,7 @@
     <div class="found">found <b id="nfound">0</b> / <span id="ntotal">5</span></div>
     <button id="skip" disabled>Skip ahead</button>
     <button id="again">New gallery</button>
+    <button id="sound" title="Audio starts on your first click">Sound: on</button>
     <div class="say" id="say">Look closely. Click anything that is wrong.</div>
   </div>
 
@@ -287,10 +288,21 @@ function opRictus(ctx,W,H,f,k=1){
   const x0=Math.min(a.x,b.x)-r*0.6,y0=Math.min(a.y,b.y)-r*0.55;
   return [x0,y0,Math.abs(b.x-a.x)+r*1.2,r*1.1];
 }
+/* Radius 0.50 of face width, not 0.22. An eye is small and high-detail, so a
+   tight falloff has a steep gradient across the eye itself and shears it — past
+   about k=2.4 at r=0.22 the eye stopped being displaced and started being a
+   smear, which is why this op could not simply be turned up. A wide radius puts
+   the eye inside the plateau of the falloff, so it translates near-rigidly and
+   the distortion is absorbed by the surrounding face. That buys 2.5x the
+   displacement with no smearing: 7x10px -> 17x25px on a 181px face.
+   The hit box stays sized to the eye and follows it, rather than growing with
+   the falloff radius — otherwise clicking anywhere on the cheek would count. */
 function opDrift(ctx,W,H,f,k=1){
-  const m=faceMetrics(f,W,H),e=pt(f,L.irisL,W,H),r=m.w*0.22;
-  liquify(ctx,W,H,[{x:e.x,y:e.y,dx:m.w*0.024*k,dy:m.h*0.030*k,r}]);
-  return [e.x-r*0.75,e.y-r*0.75,r*1.5,r*1.5];
+  const m=faceMetrics(f,W,H),e=pt(f,L.irisL,W,H),r=m.w*0.50;
+  const dx=m.w*0.024*k, dy=m.h*0.030*k;
+  liquify(ctx,W,H,[{x:e.x,y:e.y,dx,dy,r}]);
+  const hw=m.w*0.16;
+  return [e.x+dx-hw,e.y+dy-hw,hw*2,hw*2];
 }
 /* Base 0.13 of face height, not 0.075. At the old strength this was ~13px on a
    164px face — perceptible only if you already knew where to look, which made
@@ -452,6 +464,157 @@ async function resolveAll(titles){
   return map;
 }
 
+/* ============================================================================
+   AUDIO — synthesised with Web Audio, not sampled.
+   No files to license or attribute, nothing added to the repo, it starts
+   instantly with no buffering, and every sting can be varied slightly per
+   trigger instead of being the same clip on repeat. A drone is mostly detuned
+   sine waves and filtered noise, which is exactly what synthesis is good at.
+   ========================================================================== */
+const SND=(()=>{
+  let ctx=null,master=null,bgm=null,verbIn=null,started=false,muted=false;
+  const voices=[];
+  let creakTimer=null;
+
+  const impulse=(sec,decay)=>{
+    const rate=ctx.sampleRate,len=Math.max(1,(rate*sec)|0);
+    const b=ctx.createBuffer(2,len,rate);
+    for(let c=0;c<2;c++){const d=b.getChannelData(c);
+      for(let i=0;i<len;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/len,decay);}
+    return b;
+  };
+  const noise=sec=>{
+    const rate=ctx.sampleRate,len=Math.max(1,(rate*sec)|0);
+    const b=ctx.createBuffer(1,len,rate),d=b.getChannelData(0);
+    for(let i=0;i<len;i++) d[i]=Math.random()*2-1;
+    return b;
+  };
+  function init(){
+    if(ctx) return true;
+    const AC=window.AudioContext||window.webkitAudioContext;
+    if(!AC) return false;
+    ctx=new AC();
+    master=ctx.createGain(); master.gain.value=muted?0:0.85; master.connect(ctx.destination);
+    const conv=ctx.createConvolver(); conv.buffer=impulse(3.6,2.4);
+    const wet=ctx.createGain(); wet.gain.value=0.55;
+    conv.connect(wet); wet.connect(master);
+    verbIn=conv;
+    bgm=ctx.createGain(); bgm.gain.value=0; bgm.connect(master);
+    return true;
+  }
+  const now=()=>ctx.currentTime;
+
+  function startBgm(){
+    if(!init()||started) return;
+    if(ctx.state==="suspended") ctx.resume();
+    started=true;
+    // two detuned low sines beat against each other — the unease is the beating
+    for(const f of [48.0,48.37,72.5]){
+      const o=ctx.createOscillator(); o.type="sine"; o.frequency.value=f;
+      const g=ctx.createGain(); g.gain.value=f>60?0.05:0.13;
+      o.connect(g); g.connect(bgm); o.start(); voices.push(o,g);
+    }
+    // breathing noise bed through a slowly sweeping low-pass
+    const n=ctx.createBufferSource(); n.buffer=noise(6); n.loop=true;
+    const lp=ctx.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=320; lp.Q.value=6;
+    const ng=ctx.createGain(); ng.gain.value=0.07;
+    n.connect(lp); lp.connect(ng); ng.connect(bgm); n.start(); voices.push(n,lp,ng);
+    const lfo=ctx.createOscillator(); lfo.frequency.value=0.045;
+    const lfoAmt=ctx.createGain(); lfoAmt.gain.value=170;
+    lfo.connect(lfoAmt); lfoAmt.connect(lp.frequency); lfo.start(); voices.push(lfo,lfoAmt);
+    bgm.gain.cancelScheduledValues(now());
+    bgm.gain.setValueAtTime(0,now());
+    bgm.gain.linearRampToValueAtTime(0.9,now()+4.5);      // long fade in
+    scheduleCreak();
+  }
+  function scheduleCreak(){
+    clearTimeout(creakTimer);
+    creakTimer=setTimeout(()=>{ if(started){creak();scheduleCreak();} },
+                          7000+Math.random()*16000);
+  }
+  function creak(){
+    if(!ctx) return;
+    const t=now(), dur=0.5+Math.random()*1.1;
+    const n=ctx.createBufferSource(); n.buffer=noise(dur);
+    const bp=ctx.createBiquadFilter(); bp.type="bandpass";
+    bp.Q.value=14+Math.random()*16;
+    const f0=260+Math.random()*700;
+    bp.frequency.setValueAtTime(f0,t);
+    bp.frequency.exponentialRampToValueAtTime(f0*(0.45+Math.random()*0.4),t+dur);
+    const g=ctx.createGain();
+    g.gain.setValueAtTime(0,t);
+    g.gain.linearRampToValueAtTime(0.045,t+dur*0.3);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    n.connect(bp); bp.connect(g); g.connect(verbIn); g.connect(master);
+    n.start(t); n.stop(t+dur);
+  }
+
+  /* the sting: a dissonant cluster, hard attack, long tail, bending downward */
+  function found(kind){
+    if(!init()) return;
+    if(ctx.state==="suspended") ctx.resume();
+    const t=now();
+    const root=(kind==="mouth"?128:168)*(0.96+Math.random()*0.08);
+    // root, tritone, minor ninth — deliberately unresolved
+    [[1,0.30],[Math.SQRT2,0.22],[2.12,0.14]].forEach(([mul,amp],i)=>{
+      const o=ctx.createOscillator(); o.type=i?"sawtooth":"triangle";
+      o.frequency.setValueAtTime(root*mul,t);
+      o.frequency.exponentialRampToValueAtTime(root*mul*0.72,t+1.5);
+      const g=ctx.createGain();
+      g.gain.setValueAtTime(0,t);
+      g.gain.linearRampToValueAtTime(amp,t+0.006);        // near-instant attack
+      g.gain.exponentialRampToValueAtTime(0.0001,t+1.6);
+      const lp=ctx.createBiquadFilter(); lp.type="lowpass";
+      lp.frequency.setValueAtTime(2600,t);
+      lp.frequency.exponentialRampToValueAtTime(420,t+1.4);
+      o.connect(lp); lp.connect(g); g.connect(master); g.connect(verbIn);
+      o.start(t); o.stop(t+1.7);
+    });
+    const n=ctx.createBufferSource(); n.buffer=noise(0.3);
+    const hp=ctx.createBiquadFilter(); hp.type="highpass"; hp.frequency.value=1800;
+    const ng=ctx.createGain();
+    ng.gain.setValueAtTime(0.16,t); ng.gain.exponentialRampToValueAtTime(0.0001,t+0.28);
+    n.connect(hp); hp.connect(ng); ng.connect(master); ng.connect(verbIn);
+    n.start(t); n.stop(t+0.3);
+  }
+  function wrong(){
+    if(!init()) return;
+    const t=now();
+    const o=ctx.createOscillator(); o.type="sine";
+    o.frequency.setValueAtTime(96,t); o.frequency.exponentialRampToValueAtTime(52,t+0.4);
+    const g=ctx.createGain();
+    g.gain.setValueAtTime(0.22,t); g.gain.exponentialRampToValueAtTime(0.0001,t+0.45);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t+0.5);
+  }
+  function reveal(){                       // what you failed to see
+    if(!init()) return;
+    const t=now();
+    [138,146].forEach((f,i)=>{             // a semitone apart: sour, not scary
+      const o=ctx.createOscillator(); o.type="triangle"; o.frequency.value=f;
+      const g=ctx.createGain();
+      g.gain.setValueAtTime(0,t);
+      g.gain.linearRampToValueAtTime(0.11,t+0.25);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+1.9);
+      o.connect(g); g.connect(master); g.connect(verbIn);
+      o.start(t); o.stop(t+2);
+    });
+  }
+  function tick(){
+    if(!ctx||muted) return;
+    const t=now();
+    const o=ctx.createOscillator(); o.type="square"; o.frequency.value=1120;
+    const g=ctx.createGain();
+    g.gain.setValueAtTime(0.05,t); g.gain.exponentialRampToValueAtTime(0.0001,t+0.07);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t+0.08);
+  }
+  function setMuted(m){
+    muted=m;
+    if(master) master.gain.linearRampToValueAtTime(m?0:0.85,now()+0.25);
+  }
+  return {startBgm,found,wrong,reveal,tick,setMuted,
+          isMuted:()=>muted, ready:()=>!!ctx};
+})();
+
 /* ========================= game ========================= */
 const ROUND_MS=30000, PENALTY=3000, DISPW=620;
 let STATE=null, TICK=null;
@@ -606,7 +769,7 @@ async function build(){
     for(const op of r.ops){
       let box=null,label="",kind=null,tone=null,grain=null;
       if(op==="rictus"){ box=opRictus(ctx,w.W,w.H,w.face,1.0); label="the mouth is not one a face can make"; }
-      else if(op==="drift"){ box=opDrift(ctx,w.W,w.H,w.face,1.6); label="one eye has drifted out of true"; }
+      else if(op==="drift"){ box=opDrift(ctx,w.W,w.H,w.face,4.0); label="one eye has drifted out of true"; }
       else if(op==="elongate"){ box=opElongate(ctx,w.W,w.H,w.face,1.5); label="the jaw has been drawn down"; }
       else{
         const part=parts[(Math.random()*parts.length)|0];
@@ -891,6 +1054,7 @@ function onClick(ev,w){
     $("#nfound").textContent=STATE.found;
     ringMark(c,hit.box,"rgba(127,163,104,.95)");
     // the reward: it was still while you looked for it, and now it isn't
+    SND.found(hit.kind);
     if(hit.op==="graft"){
       if(hit.kind==="mouth") startMouthing(w,hit);   // a cavity opens
       else                   startBlinking(w,hit);   // an eye blinks
@@ -900,6 +1064,7 @@ function onClick(ev,w){
     else say("good",`Found it — ${hit.label}. ${left} more here.`);
   }else{
     STATE.endAt-=PENALTY;
+    SND.wrong();
     say("bad","Nothing wrong there. −3 seconds.");
   }
 }
@@ -915,7 +1080,7 @@ function endRound(cleared){
   const missed=w.anomalies.filter(a=>!a.found);
   for(const a of missed) ringMark(w.canvas,a.box,"rgba(184,53,44,.9)",[6,4]);
   w.plate.classList.add("lock");
-  if(missed.length) say("bad","Missed — "+missed.map(m=>m.label).join("; ")+".");
+  if(missed.length){ SND.reveal(); say("bad","Missed — "+missed.map(m=>m.label).join("; ")+"."); }
   // linger when a found graft is blinking, so the beat has time to land —
   // Skip ahead is there for anyone who would rather not watch it
   // a mouth cycle is ~1.9s against a blink's 0.3s, so it needs longer to land
@@ -943,6 +1108,7 @@ function tick(){
   const cl=$("#clock");
   cl.textContent=String(s).padStart(2,"0");
   cl.className="clock"+(s<=5?" crit":s<=10?" warn":"");
+  if(s<=5&&s>0&&s!==STATE.lastTick){ STATE.lastTick=s; SND.tick(); }
   const bar=$("#bar");
   bar.style.width=(left/ROUND_MS*100)+"%";
   bar.className="bar"+(s<=5?" crit":"");
@@ -977,6 +1143,15 @@ function fail(msg){
 
 $("#again").addEventListener("click",()=>build().catch(e=>fail(e.message)));
 $("#skip").addEventListener("click",()=>endRound(false));
+/* Browsers refuse to start audio before a gesture, so the drone begins on the
+   first click anywhere rather than on load. */
+document.addEventListener("pointerdown",()=>{ if(!SND.isMuted()) SND.startBgm(); },{once:true});
+$("#sound").addEventListener("click",()=>{
+  const m=!SND.isMuted();
+  SND.setMuted(m);
+  $("#sound").textContent="Sound: "+(m?"off":"on");
+  if(!m) SND.startBgm();
+});
 build().catch(e=>fail(e.message));
 </script>
 </body>
