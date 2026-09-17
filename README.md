@@ -35,9 +35,32 @@ the painting's own paint, which has two consequences that matter:
 | **rictus** | Mouth corners dragged past where a face can go | a detected face |
 | **drift** | One eye pulled out of alignment with the other | a detected face |
 | **elongate** | The jaw drawn down | a detected face |
+| **glance** | Every few seconds the sitter looks aside, left then right | a *frontal* detected face |
 
 The graft donor is always one of the loaded paintings — hung or spare — so the
 eye arrives already carrying the right period, palette and varnish.
+
+**`glance` is the exception to everything above.** The other four edit pixels
+and leave them edited; the painting is wrong the moment it is hung. `glance`
+leaves the canvas untouched — at rest it is the original, byte for byte — and
+the anomaly exists only in time. Each iris is cut out, the sclera behind it is
+reconstructed, and it is re-stamped about 4px aside for roughly a second.
+
+Two consequences follow. The answer key marks where the eyes *are* rather than
+what was done to them, because nothing was done to them. And it is much the
+easiest anomaly in the game: motion is the strongest salience cue the visual
+system has, which is exactly why the blink reward below is withheld until after
+the click. The timings only buy a chance of missing it, not difficulty.
+
+The sitter has to be frontal. Yaw is estimated from nose-to-cheek landmark
+asymmetry and gated at 0.14 — sliding an iris inside a head turned three-quarter
+moves the pupil while the lid occlusion and the catchlight stay put, which reads
+as a rendering fault rather than a look. Most old masters painted three-quarter,
+so this rejects a good share of the pool.
+
+`glance` and `drift` must never land on the same painting: one warps the eye and
+the other re-stamps the iris from the unwarped landmarks, so they would fight
+over the same pixels. The one-mode-per-painting assignment guarantees it.
 
 Three things make a graft sit *in* a surface rather than on it: a spherical warp
 so it curves with the fruit, a multiply of the host's own luminance gradient so
@@ -58,6 +81,7 @@ Graft width is clamped to 5.5–14% of the canvas width for exactly this reason 
 | `labs.html` | How it works — links to the three labs below |
 | `eye-graft.html` | Eye harvest and graft, with live sliders |
 | `ops-lab.html` | Clone and removal ops, with per-op timings |
+| `gaze-lab.html` | The iris cut, sclera reconstruction and re-stamp behind `glance`, with the travel measured |
 | `painterly-lab.html` | Whether a photo can be pushed into the paintings' domain well enough for the ops to land |
 | `curate.html` | Build-time asset curation — see **Assets** below |
 

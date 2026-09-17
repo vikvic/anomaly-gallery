@@ -337,6 +337,167 @@ function opElongate(ctx,W,H,f,k=1){
   return [c.x-r*0.7,c.y-r*0.65,r*1.4,r*1.3+dy*0.6];
 }
 
+/* ============================================================================
+   GLANCE — the one anomaly that is not in the paint.
+
+   Every other op edits pixels and leaves them edited: the painting is wrong
+   the moment it is hung, and the player's job is to notice. This one leaves
+   the painting untouched. At rest it is the original canvas, pixel for pixel.
+   What is wrong is that every few seconds the sitter looks aside.
+
+   That makes it the only anomaly with no static answer — the box marks where
+   the eyes are, not what was done to them, because nothing was done to them.
+
+   Mechanically it is the gaze-lab rig: cut each iris out, reconstruct the
+   sclera behind it, and re-stamp the iris a few pixels off centre. See
+   gaze-lab.html for the measurements and for why the sclera has to be sampled
+   as sclera rather than from the paint immediately around the iris.
+   ========================================================================== */
+const GAZE={eyeR:{c:468,iris:[469,470,471,472]},
+            eyeL:{c:473,iris:[474,475,476,477]}};
+const path0=pts=>{const p=new Path2D();
+  pts.forEach((q,i)=>i?p.lineTo(q.x,q.y):p.moveTo(q.x,q.y)); p.closePath(); return p;};
+
+/* Yaw proxy from nose-to-cheek asymmetry. 0 is frontal and it climbs as the
+   head turns. Four landmark reads, no extra model output. Most old masters
+   painted three-quarter, and sliding an iris inside a head that is turned away
+   moves the pupil while the lid occlusion and the catchlight stay put — it
+   reads as a rendering fault, not as a glance. */
+function yawAsym(f,W,H){
+  const n=pt(f,1,W,H), a=pt(f,234,W,H), b=pt(f,454,W,H);
+  const da=Math.hypot(a.x-n.x,a.y-n.y), db=Math.hypot(b.x-n.x,b.y-n.y);
+  return Math.abs(da-db)/Math.max(1e-6,da+db);
+}
+const YAW_MAX=0.14;
+
+function buildGlanceEye(srcCv,f,W,H,ringName,opt={}){
+  const {holeK=1.05, feather=0.14, blur=1}=opt;
+  const ring=RING[ringName].map(i=>({x:f[i].x*W,y:f[i].y*H}));
+  const g=GAZE[ringName];
+  const c={x:f[g.c].x*W, y:f[g.c].y*H};
+  let r=0; for(const i of g.iris) r+=Math.hypot(f[i].x*W-c.x, f[i].y*H-c.y);
+  r/=g.iris.length;
+  if(!(r>0.6)) return null;
+
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for(const p of ring){x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);
+                       x1=Math.max(x1,p.x);y1=Math.max(y1,p.y);}
+  const eyeW=x1-x0, eyeH=y1-y0;
+  const pad=Math.max(5,r*1.8);
+  const bx=Math.max(0,Math.floor(x0-pad)), by=Math.max(0,Math.floor(y0-pad));
+  const bw=Math.min(W-bx,Math.ceil(eyeW+pad*2)), bh=Math.min(H-by,Math.ceil(eyeH+pad*2));
+  if(bw<6||bh<6) return null;
+
+  const path=path0(ring);
+  const mk=document.createElement("canvas"); mk.width=bw; mk.height=bh;
+  const mkx=mk.getContext("2d",{willReadFrequently:true});
+  mkx.save(); mkx.translate(-bx,-by); mkx.fillStyle="#fff"; mkx.fill(path); mkx.restore();
+  const MASK=mkx.getImageData(0,0,bw,bh).data;
+  const inRing=(x,y)=>MASK[(y*bw+x)*4+3]>127;
+
+  /* The iris is taller than the gap between the lids — measured at 620px,
+     r=8.75 inside a 12px aperture — so a plain circular cut is more than half
+     eyelid. Both artefacts below are masked by the aperture. */
+  const SR=Math.max(2,Math.ceil(r*(1+feather))), sw=SR*2, sh=SR*2;
+  const sp=document.createElement("canvas"); sp.width=sw; sp.height=sh;
+  const spx=sp.getContext("2d",{willReadFrequently:true});
+  spx.drawImage(srcCv, c.x-SR, c.y-SR, sw, sh, 0,0, sw,sh);
+  {
+    const im=spx.getImageData(0,0,sw,sh), d=im.data;
+    const inner=r*(1-feather*0.5), outer=r*(1+feather*0.5);
+    for(let y=0;y<sh;y++)for(let x=0;x<sw;x++){
+      const dd=Math.hypot(x+0.5-SR,y+0.5-SR);
+      let a = dd<=inner?1 : dd>=outer?0 : 1-(dd-inner)/(outer-inner);
+      a=a*a*(3-2*a);
+      const gx=Math.round(c.x-SR+x-bx), gy=Math.round(c.y-SR+y-by);
+      if(gx<0||gy<0||gx>=bw||gy>=bh||!inRing(gx,gy)) a=0;
+      d[(y*sw+x)*4+3]=Math.round(a*255);
+    }
+    spx.putImageData(im,0,0);
+  }
+
+  const pl=document.createElement("canvas"); pl.width=bw; pl.height=bh;
+  const plx=pl.getContext("2d",{willReadFrequently:true});
+  plx.drawImage(srcCv,bx,by,bw,bh,0,0,bw,bh);
+  {
+    const im=plx.getImageData(0,0,bw,bh), d=im.data;
+    const lx=c.x-bx, ly=c.y-by, R=r*holeK;
+    const LU=k=>d[k]*0.299+d[k+1]*0.587+d[k+2]*0.114;
+    const sc=[];
+    for(let y=0;y<bh;y++)for(let x=0;x<bw;x++){
+      if(!inRing(x,y)) continue;
+      if(Math.hypot(x+0.5-lx,y+0.5-ly)<R) continue;
+      sc.push((y*bw+x)*4);
+    }
+    if(sc.length<8) return null;
+    const lums=sc.map(LU).sort((a,b)=>a-b), cut=lums[Math.floor(lums.length*0.55)];
+    let tr=0,tg=0,tb=0,tl=0,n=0;
+    for(const k of sc){ if(LU(k)<cut) continue;
+      tr+=d[k]; tg+=d[k+1]; tb+=d[k+2]; tl+=LU(k); n++; }
+    if(!n) return null;
+    tr/=n; tg/=n; tb/=n; tl=Math.max(1,tl/n);
+    const prof=new Float64Array(bh).fill(NaN);
+    for(let y=0;y<bh;y++){
+      const row=[];
+      for(let x=0;x<bw;x++){
+        if(!inRing(x,y)) continue;
+        if(Math.hypot(x+0.5-lx,y+0.5-ly)<R) continue;
+        row.push(LU((y*bw+x)*4));
+      }
+      if(row.length>=2){ row.sort((a,b)=>a-b);
+        prof[y]=Math.max(0.55,Math.min(1.35,row[row.length>>1]/tl)); }
+    }
+    const known=[]; for(let y=0;y<bh;y++) if(!Number.isNaN(prof[y])) known.push(y);
+    if(!known.length) prof.fill(1);
+    else for(let y=0;y<bh;y++){
+      if(!Number.isNaN(prof[y])) continue;
+      let a=known[0],b=known[known.length-1];
+      for(const q of known){ if(q<=y)a=q; if(q>=y){b=q;break;} }
+      prof[y]= a===b?prof[a] : prof[a]+(prof[b]-prof[a])*((y-a)/(b-a));
+    }
+    for(let y=0;y<bh;y++)for(let x=0;x<bw;x++){
+      if(!inRing(x,y)) continue;
+      if(Math.hypot(x+0.5-lx,y+0.5-ly)>=R) continue;
+      const k=(y*bw+x)*4, p=prof[y];
+      d[k]=Math.min(255,tr*p); d[k+1]=Math.min(255,tg*p); d[k+2]=Math.min(255,tb*p); d[k+3]=255;
+    }
+    for(let pass=0;pass<blur;pass++){
+      const src=Uint8ClampedArray.from(d);
+      for(let y=1;y<bh-1;y++)for(let x=1;x<bw-1;x++){
+        if(!inRing(x,y)) continue;
+        if(Math.hypot(x+0.5-lx,y+0.5-ly)>R+1) continue;
+        const k=(y*bw+x)*4;
+        for(let ch=0;ch<3;ch++){
+          let s=0;
+          for(let j=-1;j<=1;j++)for(let i=-1;i<=1;i++) s+=src[((y+j)*bw+(x+i))*4+ch];
+          d[k+ch]=s/9;
+        }
+      }
+    }
+    plx.putImageData(im,0,0);
+  }
+  /* Travel is eyeball rotation, not the width of the sclera: the ball has a
+     radius of about 2x the iris, so the iris moves ballR*sin(theta). The
+     sclera limit is roughly 3x that and would be a fully deviated stare. */
+  return {c,r,bx,by,bw,bh,plate:pl,sprite:sp,SR,path,
+          ballR:r*2.05, maxX:Math.max(0,eyeW/2-r), ox:0};
+}
+
+/* Builds the rig and returns the hit box. Deliberately does NOT touch ctx. */
+function opGlance(ctx,W,H,f,rig){
+  const eyes=[];
+  for(const ringName of ["eyeR","eyeL"]){
+    const e=buildGlanceEye(ctx.canvas,f,W,H,ringName);
+    if(e) eyes.push(e);
+  }
+  if(eyes.length<2) return null;            // one eye glancing is a defect, not a gaze
+  rig.eyes=eyes;
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for(const e of eyes){ x0=Math.min(x0,e.bx); y0=Math.min(y0,e.by);
+                        x1=Math.max(x1,e.bx+e.bw); y1=Math.max(y1,e.by+e.bh); }
+  return [x0,y0,x1-x0,y1-y0];
+}
+
 /* ========================= target finding ========================= */
 /* Distance transform over a predicate mask, returning the top local maxima.
    Each is the centre of a coherent object, and `r` is the radius of the largest
@@ -774,10 +935,16 @@ async function build(){
      host them. Over-fetching earlier is what keeps this from coming up short. */
   const haveEye   = parts.some(p=>p.kind!=="mouth");
   const haveMouth = parts.some(p=>p.kind==="mouth");
+  /* glance needs a frontal sitter, and it must never land on the same painting
+     as drift: one warps the eye, the other re-stamps the iris from the
+     unwarped landmarks, so the two would fight over the same pixels. The
+     one-mode-per-painting assignment below already guarantees that, and this
+     is the reason it must stay that way. */
   const MODES=[
     {id:"drift",      fits:w=>!!w.face},
     {id:"rictus",     fits:w=>!!w.face},
     {id:"elongate",   fits:w=>!!w.face},
+    {id:"glance",     fits:w=>!!w.face&&yawAsym(w.face,w.W,w.H)<=YAW_MAX},
     {id:"graftEye",   fits:w=>w.graftable&&haveEye},
     {id:"graftMouth", fits:w=>w.graftable&&haveMouth}
   ];
@@ -815,7 +982,9 @@ async function build(){
       const mode=r.mode;
       const op=mode.startsWith("graft")?"graft":mode;
       let box=null,label="",kind=null,tone=null,grain=null;
+      const rig={};
       if(op==="rictus"){ box=opRictus(ctx,w.W,w.H,w.face,1.0); label="the mouth is not one a face can make"; }
+      else if(op==="glance"){ box=opGlance(ctx,w.W,w.H,w.face,rig); label="the sitter keeps looking aside"; }
       else if(op==="drift"){ box=opDrift(ctx,w.W,w.H,w.face,4.0); label="one eye has drifted out of true"; }
       else if(op==="elongate"){ box=opElongate(ctx,w.W,w.H,w.face,1.5); label="the jaw has been drawn down"; }
       else{
@@ -846,7 +1015,7 @@ async function build(){
                                  :"there is an eye where none belongs";
       }
       if(box){
-        const a={op,mode,box,label,kind,tone,grain,found:false};
+        const a={op,mode,box,label,kind,tone,grain,found:false,eyes:rig.eyes||null};
         w.anomalies.push(a); anomalies.push(a);
       }
     }
@@ -928,9 +1097,80 @@ function startBlinking(w,a){
 }
 function stopBlinking(a){
   a.blinking=false;
+  a.glancing=false;
   if(a.raf) cancelAnimationFrame(a.raf);
   if(a.timer) clearTimeout(a.timer);
   a.raf=a.timer=null;
+  // leave the sitter looking ahead rather than frozen mid-glance
+  if(a.drawRest) a.drawRest();
+}
+
+/* ============================================================================
+   GLANCE, animated.
+
+   Unlike the blink, this runs DURING the hunt — it has to, because it is the
+   anomaly rather than the reward for finding it. That is a deliberate break
+   with the rule the blink exists to obey, and it costs something: motion is
+   the strongest salience cue there is, so this is the easiest anomaly in the
+   game and no amount of tuning makes it hard. What the numbers below buy is a
+   chance of missing it, not difficulty.
+
+     GAP    how long the sitter holds still. Long enough that a player
+            scanning the lower half of the canvas can be looking away.
+     OUT    ease aside. Fast — a saccade is quick, and a slow slide reads as
+            a drifting eye rather than a look.
+     HOLD   how long the look is held.
+     BACK   ease front again, slower than the way out.
+
+   Direction alternates rather than being random, so the sitter reads as
+   looking around the room instead of twitching.
+   ========================================================================== */
+const GLANCE={GAP:[3600,7200], FIRST:[2200,4800], OUT:190, HOLD:[620,1150], BACK:280,
+              DEG:14};
+const rnd=([a,b])=>a+Math.random()*(b-a);
+
+function drawGlance(w,a){
+  const g=w.canvas.getContext("2d");
+  for(const e of a.eyes){
+    g.drawImage(w.dirtyCv, e.bx,e.by,e.bw,e.bh, e.bx,e.by,e.bw,e.bh);   // rest
+    g.drawImage(e.plate, e.bx, e.by);                                    // iris gone
+    g.save(); g.clip(e.path);
+    g.drawImage(e.sprite, e.c.x-e.SR+e.ox, e.c.y-e.SR);
+    g.restore();
+  }
+}
+function startGlancing(w,a){
+  if(a.glancing) return;
+  a.glancing=true;
+  a.dir=a.dir||1;
+  a.drawRest=()=>{ for(const e of a.eyes) e.ox=0; drawGlance(w,a); };
+  const cycle=()=>{
+    if(!a.glancing||!STATE||STATE.over||STATE.paused) return;
+    a.dir=-a.dir;
+    const hold=rnd(GLANCE.HOLD), total=GLANCE.OUT+hold+GLANCE.BACK;
+    const t0=performance.now();
+    const step=()=>{
+      if(!a.glancing||!STATE||STATE.over||STATE.paused) return;
+      const t=performance.now()-t0;
+      let p;
+      if(t<GLANCE.OUT) p=t/GLANCE.OUT;
+      else if(t<GLANCE.OUT+hold) p=1;
+      else if(t<total) p=1-(t-GLANCE.OUT-hold)/GLANCE.BACK;
+      else p=0;
+      p=p*p*(3-2*p);
+      for(const e of a.eyes){
+        const k=Math.min(e.maxX, e.ballR*Math.sin(GLANCE.DEG*Math.PI/180))*a.dir;
+        e.ox=k*p;
+      }
+      drawGlance(w,a);
+      if(t<total) a.raf=requestAnimationFrame(step);
+      else { for(const e of a.eyes) e.ox=0; drawGlance(w,a);
+             a.timer=setTimeout(cycle, rnd(GLANCE.GAP)); }
+    };
+    a.raf=requestAnimationFrame(step);
+  };
+  // the first look is delayed, so the painting is still when it is first hung
+  a.timer=setTimeout(cycle, rnd(GLANCE.FIRST));
 }
 function stopAllBlinking(){
   if(!STATE||!STATE.anomalies) return;
@@ -1077,6 +1317,8 @@ function nextRound(){
   STATE.paused=false; $("#gal").classList.remove("paused");
   const n=w.anomalies.length;
   say("", n===1 ? "One thing here is wrong." : `${n} things here are wrong.`);
+  // the only anomaly that animates before it is found
+  for(const a of w.anomalies) if(a.op==="glance") startGlancing(w,a);
   TICK=setInterval(tick,100);
   tick();
 }
@@ -1139,7 +1381,7 @@ function endRound(cleared){
   // linger when a found graft is blinking, so the beat has time to land —
   // Skip ahead is there for anyone who would rather not watch it
   // a mouth cycle is ~1.9s against a blink's 0.3s, so it needs longer to land
-  const anim=w.anomalies.find(a=>a.found&&a.blinking);
+  const anim=w.anomalies.find(a=>a.found&&(a.blinking||a.glancing));
   const wait = missed.length ? 2000
              : anim ? (anim.kind==="mouth" ? 3400 : 2800)
              : 900;
@@ -1177,6 +1419,7 @@ function setPaused(p){
     $("#skip").disabled=false;
     // restart whatever was animating before the pause
     for(const a of w.anomalies){
+      if(a.op==="glance"){ startGlancing(w,a); continue; }   // animates found or not
       if(!a.found||a.op!=="graft") continue;
       if(a.kind==="mouth") startMouthing(w,a); else startBlinking(w,a);
     }
