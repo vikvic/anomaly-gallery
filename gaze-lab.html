@@ -146,6 +146,7 @@ function toCanvas(img,W){
 }
 const snap=cv=>{const c=document.createElement("canvas");c.width=cv.width;c.height=cv.height;
   c.getContext("2d").drawImage(cv,0,0);return c;};
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const path0=pts=>{const p=new Path2D();
   pts.forEach((q,i)=>i?p.lineTo(q.x,q.y):p.moveTo(q.x,q.y)); p.closePath(); return p;};
 
@@ -334,6 +335,24 @@ function yawAsym(f,W,H){
 let FL=null, ITEMS=[], CLEAN=null, EYES=[], FACE=null, YAW=0, W=0, H=0;
 let PTR=null, LAST=performance.now(), FPS=0, COST=0;
 
+/* ---------- WebGL preflight ----------
+   MediaPipe's Web vision tasks build a GL context through OffscreenCanvas
+   whatever delegate is requested — the GL path is in image handling, not in
+   inference, so delegate:"CPU" does not avoid it. When the browser cannot
+   create that context the failure surfaces deep inside the wasm bundle as
+   "GLctx is undefined", which says nothing useful. Check first and say so. */
+function webglStatus(){
+  try{
+    const c=document.createElement("canvas");
+    const gl=c.getContext("webgl2")||c.getContext("webgl")||c.getContext("experimental-webgl");
+    if(!gl) return {ok:false,why:"the browser returned no WebGL context"};
+    const dbg=gl.getExtension("WEBGL_debug_renderer_info");
+    const who=dbg?gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL):gl.getParameter(gl.RENDERER);
+    const lose=gl.getExtension("WEBGL_lose_context"); if(lose) lose.loseContext();
+    return {ok:true,renderer:String(who||"unknown")};
+  }catch(e){ return {ok:false,why:e.message||"context creation threw"}; }
+}
+
 async function getManifest(){
   try{
     const r=await fetch("assets/manifest.json",{cache:"no-store"});
@@ -353,12 +372,33 @@ async function boot(){
   ITEMS=man.items.filter(i=>i.kind==="face"||i.hasFace);
   $("#pick").innerHTML=ITEMS.map((i,k)=>
     `<option value="${k}">${(i.artist?i.artist+" — ":"")+(i.name||i.file)}</option>`).join("");
+  const gl=webglStatus();
+  if(!gl.ok){
+    $("#msg").innerHTML="";
+    $("#verdict").innerHTML=
+      `<span class="bad">WebGL is unavailable in this browser &mdash; ${esc(gl.why)}.</span> `+
+      `MediaPipe builds a GL context for image handling whatever delegate is asked for, so face `+
+      `landmarks cannot run and neither can the game on <code>index.html</code>. In Firefox, check `+
+      `<code>about:support</code> &rarr; Graphics, then Settings &rarr; Performance &rarr; re-enable `+
+      `hardware acceleration, or set <code>webgl.force-enabled</code> to true in <code>about:config</code>. `+
+      `Testing in Chrome will also unblock you.`;
+    $("#metrics").innerHTML='<tr><td class="k">webgl</td><td class="v bad">unavailable</td></tr>';
+    return;
+  }
   $("#msg").textContent="loading landmarker…";
-  const fs=await FilesetResolver.forVisionTasks(
-    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
-  FL=await FaceLandmarker.createFromOptions(fs,{
-    baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"},
-    runningMode:"IMAGE",numFaces:1});
+  try{
+    const fs=await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    FL=await FaceLandmarker.createFromOptions(fs,{
+      baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"},
+      runningMode:"IMAGE",numFaces:1});
+  }catch(e){
+    $("#msg").textContent="";
+    $("#verdict").innerHTML=`<span class="bad">Landmarker failed to load.</span> `+
+      `WebGL reports <code>${esc(gl.renderer)}</code>, so the context exists; the failure is in the `+
+      `CDN fetch or the model download. Original error: <code>${esc(e.message||String(e))}</code>`;
+    return;
+  }
   $("#pick").value="0";
   await prepare();
   requestAnimationFrame(loop);
