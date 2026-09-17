@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gaze Lab</title>
+<style>
+  :root{--bg:#131110;--panel:#1c1917;--ink:#ddd3c4;--dim:#8a7f6e;--line:#2e2822;
+        --good:#8fae7a;--warn:#c98a3f;--bad:#b4614a}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);padding:24px 16px 60px;
+       font:14px/1.55 "Iowan Old Style",Palatino,Georgia,serif}
+  .wrap{max-width:1150px;margin:0 auto}
+  h1{font-size:22px;letter-spacing:.12em;text-transform:uppercase;font-weight:400;margin:0 0 4px}
+  .sub{color:var(--dim);font-style:italic;margin:0 0 18px;max-width:72ch}
+  .bar{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:0 0 20px}
+  button,select{background:#241d16;color:var(--ink);border:1px solid #4a3d2c;padding:8px 14px;
+       font:inherit;font-size:13px;cursor:pointer;border-radius:2px;max-width:280px}
+  button:hover{background:#31271d} button:disabled{opacity:.4;cursor:default}
+  label.f{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--dim)}
+  label.f span{font:11px ui-monospace,Menlo,Consolas,monospace;color:#cbbb98;min-width:34px}
+  input[type=range]{width:118px}
+  .sec{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:14px;margin:0 0 18px}
+  .sec h2{font-size:13px;font-weight:400;letter-spacing:.09em;text-transform:uppercase;
+       margin:0 0 3px;color:#cbbb98}
+  .sec p{margin:0 0 12px;color:var(--dim);font-size:12.5px;max-width:74ch}
+  .row{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start}
+  .cell h3{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--dim);
+       margin:0 0 5px;letter-spacing:.04em;text-transform:uppercase}
+  .cell h3 b{color:var(--warn);font-weight:400}
+  canvas{display:block;border:1px solid #000;background:#0a0908;max-width:100%}
+  #stage{cursor:crosshair}
+  .msg{color:var(--dim);font-style:italic;font-size:13px}
+  table.m{border-collapse:collapse;font:12px/1.6 ui-monospace,Menlo,Consolas,monospace}
+  table.m td{padding:3px 14px 3px 0;vertical-align:top}
+  table.m td.k{color:var(--dim)}
+  table.m td.v{color:#cbbb98}
+  .verdict{font:13px/1.6 "Iowan Old Style",Palatino,Georgia,serif;margin-top:10px;
+       padding:10px 12px;border-left:2px solid var(--line);max-width:72ch}
+  .ok{color:var(--good)} .warn{color:var(--warn)} .bad{color:var(--bad)}
+  .note{color:#6d6455;font-size:12px;line-height:1.7;border-top:1px solid var(--line);
+       padding-top:14px;margin-top:22px;max-width:80ch}
+  a.back{color:#8a7f6e;font-size:13px;text-decoration:none;
+       border-bottom:1px solid #362d22;padding-bottom:2px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Gaze Lab</h1>
+  <p class="sub">The portrait's own painted irises, cut out of the canvas and re-stamped a few pixels toward the cursor. Nothing is generated: the iris is the artist's paint, the sclera behind it is reconstructed from the sclera that surrounds it, and the whole effect lives or dies on how many pixels of travel the anatomy allows.</p>
+
+  <div class="bar">
+    <a class="back" href="labs.html">&larr; Labs</a>
+    <select id="pick"><option>loading…</option></select>
+    <label class="f">Canvas
+      <select id="width">
+        <option value="470">470</option>
+        <option value="620" selected>620 (game)</option>
+        <option value="800">800</option>
+        <option value="1000">1000</option>
+      </select>
+    </label>
+    <button id="reload">Reload</button>
+    <span id="msg" class="msg"></span>
+  </div>
+
+  <div class="sec">
+    <h2>1 · The measurement that decides it</h2>
+    <p>Everything else here is tuning. Note that there are <i>two</i> limits and they differ by about 3&times;. The <b>sclera limit</b> is the iris jammed into the corner of the eye — a fully deviated stare, not what anyone does while looking around a screen. The <b>gaze travel</b> is the real one: the eyeball is a ball of radius ~2&times; the iris, so translation on the picture plane is <code>ballR&nbsp;&times;&nbsp;sin&nbsp;&theta;</code>, and a comfortable sweep is 15–20&deg;. Both are fixed by the painting and the canvas width; no amount of code makes either larger.</p>
+    <div class="row">
+      <table class="m" id="metrics"><tr><td class="k">—</td></tr></table>
+    </div>
+    <div class="verdict" id="verdict"></div>
+  </div>
+
+  <div class="sec">
+    <h2>2 · Tracking</h2>
+    <p>Move the pointer over the painting. The left panel tracks; the right is the untouched original, held still for comparison — if you cannot tell them apart while the pointer is moving, the effect does not read, and that is the answer. <b>Measured on Holbein's Henry VIII at 620px:</b> the movement reads clearly. What does <i>not</i> hold up under the 6&times; zoom is the reconstructed sclera — watch the vacated side of each eye, not the iris.</p>
+    <div class="bar">
+      <label class="f">Gaze&deg; <input type="range" id="amp" min="0" max="40" step="1" value="18"><span id="ampV">18</span></label>
+      <label class="f">Vertical <input type="range" id="vert" min="0" max="1" step="0.05" value="0.45"><span id="vertV">0.45</span></label>
+      <label class="f">Easing ms <input type="range" id="tau" min="10" max="400" step="10" value="120"><span id="tauV">120</span></label>
+      <label class="f">Iris feather <input type="range" id="feather" min="0.02" max="0.45" step="0.01" value="0.14"><span id="featherV">0.14</span></label>
+      <label class="f">Plate blur <input type="range" id="blur" min="0" max="4" step="1" value="1"><span id="blurV">1</span></label>
+      <label class="f">Hole r <input type="range" id="hole" min="0.85" max="1.5" step="0.05" value="1.05"><span id="holeV">1.05</span></label>
+      <label class="f"><input type="checkbox" id="dbg"> Debug overlay</label>
+      <label class="f"><input type="checkbox" id="freeze"> Freeze at extreme</label>
+    </div>
+    <div class="row">
+      <div class="cell">
+        <h3 id="stageLbl">tracking</h3>
+        <canvas id="stage"></canvas>
+      </div>
+      <div class="cell">
+        <h3>original — held still</h3>
+        <canvas id="ref"></canvas>
+      </div>
+      <div class="cell">
+        <h3>eyes, 6&times;</h3>
+        <canvas id="zoomA"></canvas>
+        <div style="height:7px"></div>
+        <canvas id="zoomB"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <h2>3 · Frontality</h2>
+    <p>Most old-master portraits are three-quarter. Rotating an iris inside a head that is turned away slides the pupil while the lid occlusion and the specular highlight stay put, and it reads as a glitch rather than a gaze. Yaw is estimated from landmark asymmetry — the nose's distance to each cheek edge — which costs nothing and can be baked into the manifest beside <code>hasFace</code>.</p>
+    <div class="bar">
+      <label class="f">Reject above <input type="range" id="yawMax" min="0.02" max="0.40" step="0.01" value="0.14"><span id="yawMaxV">0.14</span></label>
+    </div>
+    <div class="row"><table class="m" id="yawT"><tr><td class="k">—</td></tr></table></div>
+  </div>
+
+  <p class="note">Paintings: vendored from <a href="https://commons.wikimedia.org" style="color:#7d7263">Wikimedia Commons</a>, public domain, read from <code>assets/manifest.json</code>. Face landmarks: MediaPipe FaceLandmarker, 478 points — of which 468–472 and 473–477 are the two iris discs, giving centre and radius directly. Everything else is plain canvas pixel work. Serve over HTTP (<code>npx serve .</code>); opening this file directly will taint the canvas and the pixel reads will fail.</p>
+</div>
+
+<script type="module">
+import {FilesetResolver,FaceLandmarker}
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const $=s=>document.querySelector(s);
+
+/* ---------- MediaPipe 478-pt topology ----------
+   The 16-point contour ring per eye bounds the visible sclera: it is what the
+   iris must stay inside. The iris landmarks are the reason this technique is
+   cheap — 468/473 are the two iris centres and the four points after each are
+   the cardinal points of that iris circle, so radius comes for free and no
+   circle fitting is needed. */
+const RING={
+  R:[33,7,163,144,145,153,154,155,133,173,157,158,159,160,161,246],
+  L:[362,382,381,380,374,373,390,249,263,466,388,387,386,385,384,398]
+};
+const IRIS={R:{c:468,ring:[469,470,471,472]}, L:{c:473,ring:[474,475,476,477]}};
+const CHEEK={R:234,L:454}, NOSE=1;
+
+const loadImg=u=>new Promise((res,rej)=>{
+  const i=new Image(); i.crossOrigin="anonymous";
+  i.onload=()=>res(i); i.onerror=()=>rej(new Error("image load failed: "+u)); i.src=u;});
+function toCanvas(img,W){
+  const H=Math.round(img.height*(W/img.width));
+  const c=document.createElement("canvas"); c.width=W; c.height=H;
+  c.getContext("2d",{willReadFrequently:true}).drawImage(img,0,0,W,H);
+  return c;
+}
+const snap=cv=>{const c=document.createElement("canvas");c.width=cv.width;c.height=cv.height;
+  c.getContext("2d").drawImage(cv,0,0);return c;};
+const path0=pts=>{const p=new Path2D();
+  pts.forEach((q,i)=>i?p.lineTo(q.x,q.y):p.moveTo(q.x,q.y)); p.closePath(); return p;};
+
+/* ============================================================================
+   BUILD ONE EYE
+
+   Three artefacts, all computed once per painting:
+
+     plate   the eye's bounding box with the iris erased and the hole filled
+             from the sclera around it. Redrawn every frame to wipe the
+             previous iris position — this is what makes the iris appear to
+             move rather than smear.
+     sprite  the iris itself, cut with a soft rim, to be stamped at an offset.
+     clip    the contour ring as a path, so a large offset rides under the lid
+             instead of out onto the cheek.
+
+   The hole fill is angular rather than a flat average because the sclera
+   carries a strong vertical gradient — lid shadow above, catchlight below —
+   and a mean colour flattens it into a grey disc that reads as damage.
+   ========================================================================== */
+function buildEye(srcCv,f,W,H,side,opt){
+  const {holeK=1.05, feather=0.14, blur=1}=opt;
+  const ring=RING[side].map(i=>({x:f[i].x*W,y:f[i].y*H}));
+  const ic=IRIS[side];
+  const c={x:f[ic.c].x*W, y:f[ic.c].y*H};
+  let r=0; for(const i of ic.ring) r+=Math.hypot(f[i].x*W-c.x, f[i].y*H-c.y);
+  r/=ic.ring.length;
+  if(!(r>0.6)) return null;                       // degenerate detection
+
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for(const p of ring){x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);
+                       x1=Math.max(x1,p.x);y1=Math.max(y1,p.y);}
+  const eyeW=x1-x0, eyeH=y1-y0;
+  const pad=Math.max(5, r*1.8);
+  const bx=Math.max(0,Math.floor(x0-pad)), by=Math.max(0,Math.floor(y0-pad));
+  const bw=Math.min(W-bx,Math.ceil(eyeW+pad*2)), bh=Math.min(H-by,Math.ceil(eyeH+pad*2));
+  if(bw<6||bh<6) return null;
+
+  /* ---- aperture mask: which pixels of the box are actually inside the eye ----
+     Everything below depends on this. The iris on a painted eye is usually
+     TALLER than the gap between the lids — measured on Holbein's Henry VIII at
+     620px, the iris is r=8.75 inside an aperture only 12px high — so a plain
+     circular cut around the iris centre is more than half eyelid. Masking by
+     the contour ring is what keeps lid paint out of both artefacts below. */
+  const mk=document.createElement("canvas"); mk.width=bw; mk.height=bh;
+  const mkx=mk.getContext("2d",{willReadFrequently:true});
+  mkx.save(); mkx.translate(-bx,-by); mkx.fillStyle="#fff"; mkx.fill(path0(ring)); mkx.restore();
+  const MASK=mkx.getImageData(0,0,bw,bh).data;
+  const inRing=(x,y)=>MASK[(y*bw+x)*4+3]>127;
+
+  /* ---- sprite: the iris, feathered rim, lid paint excluded ---- */
+  const SR=Math.max(2,Math.ceil(r*(1+feather)));
+  const sw=SR*2, sh=SR*2;
+  const sp=document.createElement("canvas"); sp.width=sw; sp.height=sh;
+  const spx=sp.getContext("2d",{willReadFrequently:true});
+  spx.drawImage(srcCv, c.x-SR, c.y-SR, sw, sh, 0,0, sw,sh);
+  {
+    const im=spx.getImageData(0,0,sw,sh), d=im.data;
+    const inner=r*(1-feather*0.5), outer=r*(1+feather*0.5);
+    for(let y=0;y<sh;y++)for(let x=0;x<sw;x++){
+      const dd=Math.hypot(x+0.5-SR, y+0.5-SR);
+      let a = dd<=inner ? 1 : dd>=outer ? 0 : 1-(dd-inner)/(outer-inner);
+      a=a*a*(3-2*a);
+      // and clip to the aperture at the iris's ORIGINAL position, so the sprite
+      // carries no eyelid with it when it slides
+      const gx=Math.round(c.x-SR+x-bx), gy=Math.round(c.y-SR+y-by);
+      if(gx<0||gy<0||gx>=bw||gy>=bh||!inRing(gx,gy)) a=0;
+      d[(y*sw+x)*4+3]=Math.round(a*255);
+    }
+    spx.putImageData(im,0,0);
+  }
+
+  /* ---- plate: the box with the iris hole filled with SCLERA ----
+     The first version of this sampled an annulus around the iris and
+     interpolated by angle. It failed, and instructively: on an old-master eye
+     the annulus is overwhelmingly eyelid and orbital shadow, so the vacated
+     socket filled with skin tone and the portrait came out looking blind.
+     What has to go there is specifically sclera, so sclera is what gets
+     sampled — the brighter half of the paint that lies inside the aperture but
+     outside the iris — and the aperture's own vertical shading profile is
+     re-applied over it so the lid shadow above and the catchlight below
+     survive. Flat tone reads as a hole cut in the canvas; the profile is what
+     keeps it reading as a wet surface. */
+  const pl=document.createElement("canvas"); pl.width=bw; pl.height=bh;
+  const plx=pl.getContext("2d",{willReadFrequently:true});
+  plx.drawImage(srcCv, bx,by,bw,bh, 0,0,bw,bh);
+  {
+    const im=plx.getImageData(0,0,bw,bh), d=im.data;
+    const lx=c.x-bx, ly=c.y-by, R=r*holeK;
+    const LU=k=>d[k]*0.299+d[k+1]*0.587+d[k+2]*0.114;
+
+    const sc=[];                                   // sclera pixels: in ring, off iris
+    for(let y=0;y<bh;y++)for(let x=0;x<bw;x++){
+      if(!inRing(x,y)) continue;
+      if(Math.hypot(x+0.5-lx, y+0.5-ly)<R) continue;
+      sc.push((y*bw+x)*4);
+    }
+    if(sc.length<8) return null;                   // nothing to reconstruct from
+    const lums=sc.map(LU).sort((a,b)=>a-b);
+    const cut=lums[Math.floor(lums.length*0.55)];  // brighter half = sclera proper
+    let tr=0,tg=0,tb=0,tl=0,n=0;
+    for(const k of sc){ const l=LU(k); if(l<cut) continue;
+      tr+=d[k]; tg+=d[k+1]; tb+=d[k+2]; tl+=l; n++; }
+    if(!n) return null;
+    tr/=n; tg/=n; tb/=n; tl=Math.max(1,tl/n);
+
+    const prof=new Float64Array(bh).fill(NaN);     // per-row shading, sclera only
+    for(let y=0;y<bh;y++){
+      const row=[];
+      for(let x=0;x<bw;x++){
+        if(!inRing(x,y)) continue;
+        if(Math.hypot(x+0.5-lx, y+0.5-ly)<R) continue;
+        row.push(LU((y*bw+x)*4));
+      }
+      if(row.length>=2){ row.sort((a,b)=>a-b);
+        prof[y]=Math.max(0.55,Math.min(1.35,row[row.length>>1]/tl)); }
+    }
+    // rows wholly covered by the iris have no sample; interpolate across them
+    const known=[]; for(let y=0;y<bh;y++) if(!Number.isNaN(prof[y])) known.push(y);
+    if(!known.length) prof.fill(1);
+    else for(let y=0;y<bh;y++){
+      if(!Number.isNaN(prof[y])) continue;
+      let a=known[0],b=known[known.length-1];
+      for(const q of known){ if(q<=y)a=q; if(q>=y){b=q;break;} }
+      prof[y]= a===b ? prof[a] : prof[a]+(prof[b]-prof[a])*((y-a)/(b-a));
+    }
+
+    for(let y=0;y<bh;y++)for(let x=0;x<bw;x++){
+      if(!inRing(x,y)) continue;                   // lid paint is left untouched
+      if(Math.hypot(x+0.5-lx, y+0.5-ly)>=R) continue;
+      const k=(y*bw+x)*4, p=prof[y];
+      d[k]=Math.min(255,tr*p); d[k+1]=Math.min(255,tg*p); d[k+2]=Math.min(255,tb*p);
+      d[k+3]=255;
+    }
+    for(let pass=0;pass<blur;pass++){              // soften the seam only
+      const src=Uint8ClampedArray.from(d);
+      for(let y=1;y<bh-1;y++)for(let x=1;x<bw-1;x++){
+        if(!inRing(x,y)) continue;
+        if(Math.hypot(x+0.5-lx, y+0.5-ly)>R+1) continue;
+        const k=(y*bw+x)*4;
+        for(let ch=0;ch<3;ch++){
+          let s=0;
+          for(let j=-1;j<=1;j++)for(let i=-1;i<=1;i++) s+=src[((y+j)*bw+(x+i))*4+ch];
+          d[k+ch]=s/9;
+        }
+      }
+    }
+    plx.putImageData(im,0,0);
+  }
+
+  /* ---- two different limits, and confusing them is the easy mistake ----
+     maxX/maxY are ANATOMICAL EXTREMES: the iris at the very corner of the
+     sclera, which is a fully deviated eye and not what a person tracking
+     something across a screen does.
+
+     The number that matters for this effect is the natural one. The eye is a
+     ball that rotates; translation of the iris on the picture plane is
+     eyeballR * sin(gaze angle). Eyeball radius is ~12mm and iris radius
+     ~5.85mm, so eyeballR is about 2.05x the iris radius we just measured — in
+     whatever units the painting happens to be in, which is what makes this
+     scale-free. A comfortable tracking sweep is 15-20 degrees.
+
+     Conflating the two overstates the available movement by roughly 3x. */
+  const maxX=Math.max(0, eyeW/2 - r);
+  const maxY=Math.max(0, eyeH/2 - r);
+  const ballR=r*2.05;
+
+  const path=path0(ring);
+
+  return {side,c,r,bx,by,bw,bh,eyeW,eyeH,maxX,maxY,ballR,plate:pl,sprite:sp,SR,path,
+          ox:0,oy:0,tx:0,ty:0};
+}
+
+/* ---------- yaw proxy: nose-to-cheek asymmetry ----------
+   0 is dead frontal, and it climbs as the head turns. It is a proxy, not a
+   pose estimate — but it costs four landmark reads, needs no extra model
+   output, and it only has to separate "worth tracking" from "do not". */
+function yawAsym(f,W,H){
+  const n={x:f[NOSE].x*W,y:f[NOSE].y*H};
+  const a=Math.hypot(f[CHEEK.R].x*W-n.x, f[CHEEK.R].y*H-n.y);
+  const b=Math.hypot(f[CHEEK.L].x*W-n.x, f[CHEEK.L].y*H-n.y);
+  return Math.abs(a-b)/Math.max(1e-6,a+b);
+}
+
+/* ========================= state ========================= */
+let FL=null, ITEMS=[], CLEAN=null, EYES=[], FACE=null, YAW=0, W=0, H=0;
+let PTR=null, LAST=performance.now(), FPS=0, COST=0;
+
+async function getManifest(){
+  try{
+    const r=await fetch("assets/manifest.json",{cache:"no-store"});
+    if(!r.ok) return null;
+    return await r.json();
+  }catch(e){ return null; }
+}
+
+async function boot(){
+  $("#msg").textContent="loading manifest…";
+  const man=await getManifest();
+  if(!man||!man.items?.length){
+    $("#msg").textContent="assets/manifest.json not found — run fetch-assets.mjs, and serve over HTTP";
+    return;
+  }
+  // portraits only: a still life has no irises to move
+  ITEMS=man.items.filter(i=>i.kind==="face"||i.hasFace);
+  $("#pick").innerHTML=ITEMS.map((i,k)=>
+    `<option value="${k}">${(i.artist?i.artist+" — ":"")+(i.name||i.file)}</option>`).join("");
+  $("#msg").textContent="loading landmarker…";
+  const fs=await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  FL=await FaceLandmarker.createFromOptions(fs,{
+    baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"},
+    runningMode:"IMAGE",numFaces:1});
+  $("#pick").value="0";
+  await prepare();
+  requestAnimationFrame(loop);
+}
+
+async function prepare(){
+  EYES=[]; CLEAN=null; FACE=null;
+  const item=ITEMS[+$("#pick").value];
+  if(!item) return;
+  $("#msg").textContent="analysing…";
+  const DW=+$("#width").value;
+  let img;
+  try{ img=await loadImg("assets/"+item.file); }
+  catch(e){ $("#msg").textContent=e.message; return; }
+  CLEAN=toCanvas(img,DW); W=CLEAN.width; H=CLEAN.height;
+
+  const res=FL.detect(CLEAN);
+  FACE=res.faceLandmarks?.[0]||null;
+  for(const cv of ["#stage","#ref"]){ $(cv).width=W; $(cv).height=H; }
+  $("#ref").getContext("2d").drawImage(CLEAN,0,0);
+  $("#stage").getContext("2d").drawImage(CLEAN,0,0);   // the loop only redraws eye boxes
+
+  if(!FACE){
+    $("#msg").textContent="no face detected on this painting";
+    $("#stage").getContext("2d").drawImage(CLEAN,0,0);
+    $("#metrics").innerHTML='<tr><td class="k">face</td><td class="v bad">not detected</td></tr>';
+    $("#verdict").innerHTML='<span class="bad">No landmarks.</span> This painting would be excluded by the same <code>hasFace</code> gate the game already uses.';
+    return;
+  }
+  YAW=yawAsym(FACE,W,H);
+  const opt={holeK:+$("#hole").value, feather:+$("#feather").value, blur:+$("#blur").value};
+  for(const side of ["L","R"]){
+    const e=buildEye(CLEAN,FACE,W,H,side,opt);
+    if(e) EYES.push(e);
+  }
+  $("#msg").textContent="";
+  report();
+}
+
+/* ========================= reporting ========================= */
+/* Rotation of the eyeball, clamped by the sclera. The clamp almost never bites
+   below ~35 degrees, which is the point: the sclera is not the constraint.
+   The constraint is that a natural gaze sweep is a small rotation of a small
+   ball, and at this canvas size that is a couple of pixels. */
+function travel(e,vert){
+  const s=Math.sin(+$("#amp").value*Math.PI/180)*e.ballR;
+  return [Math.min(e.maxX,s), Math.min(e.maxY,s*vert)];
+}
+function faceW(){
+  let x0=1,x1=0,y0=1,y1=0;
+  for(const p of FACE){x0=Math.min(x0,p.x);x1=Math.max(x1,p.x);y0=Math.min(y0,p.y);y1=Math.max(y1,p.y);}
+  return {w:(x1-x0)*W, h:(y1-y0)*H};
+}
+function report(){
+  if(!EYES.length){ return; }
+  const m=faceW(), vert=+$("#vert").value;
+  const rows=[
+    ["canvas width", W+" px"],
+    ["face width", m.w.toFixed(1)+" px  ("+(m.w/W*100).toFixed(0)+"% of canvas)"],
+  ];
+  let worstTravel=1e9;
+  for(const e of EYES){
+    const [tx,ty]=travel(e,vert);
+    worstTravel=Math.min(worstTravel,tx);
+    rows.push(["eye "+e.side+" — width / iris r", e.eyeW.toFixed(1)+" / "+e.r.toFixed(2)+" px"]);
+    rows.push(["eye "+e.side+" — sclera limit (extreme)", "&plusmn;"+e.maxX.toFixed(2)+" / &plusmn;"+e.maxY.toFixed(2)+" px"]);
+    rows.push(["eye "+e.side+" — <b>gaze travel at "+$("#amp").value+"&deg;</b>",
+      "<b>&plusmn;"+tx.toFixed(2)+"</b> / &plusmn;"+ty.toFixed(2)+" px"+
+      (tx>=e.maxX-0.01?"  <span style='color:#8a7f6e'>(clamped by sclera)</span>":"")]);
+  }
+  rows.push(["yaw asymmetry", YAW.toFixed(3)+(YAW>+$("#yawMax").value?"  <span class='bad'>rejected</span>":"  <span class='ok'>frontal enough</span>")]);
+  rows.push(["frame cost", COST.toFixed(2)+" ms  ·  "+FPS.toFixed(0)+" fps"]);
+  $("#metrics").innerHTML=rows.map(([k,v])=>`<tr><td class="k">${k}</td><td class="v">${v}</td></tr>`).join("");
+
+  let cls,txt;
+  if(worstTravel<2){ cls="bad";
+    txt="Under 2px. A faint shimmer at best, and on textured oil probably invisible. Either the face is small in frame or the gaze angle is set too low."; }
+  else if(worstTravel<4){ cls="warn";
+    txt="2–4px. Perceptible against the held-still copy, marginal in peripheral vision."; }
+  else{ cls="ok";
+    txt="Over 4px — roughly a quarter of the iris's own width, which reads plainly. Reference: Holbein's Henry VIII measures r=8.75px with a 37&times;12px aperture at this canvas size, giving 5.5px at 18&deg;. Now check the zoom for the real failure mode, which is the reconstructed sclera, not the movement."; }
+  $("#verdict").innerHTML=`<span class="${cls}">Horizontal gaze travel ${worstTravel.toFixed(2)}px at ${$("#amp").value}&deg;.</span> ${txt}`;
+
+  $("#yawT").innerHTML=[
+    ["this painting", YAW.toFixed(3)],
+    ["threshold", (+$("#yawMax").value).toFixed(2)],
+    ["verdict", YAW>+$("#yawMax").value
+      ? "<span class='bad'>three-quarter — would be skipped</span>"
+      : "<span class='ok'>frontal — would track</span>"]
+  ].map(([k,v])=>`<tr><td class="k">${k}</td><td class="v">${v}</td></tr>`).join("");
+}
+
+/* ========================= render ========================= */
+function loop(t){
+  const dt=Math.min(100,t-LAST); LAST=t;
+  FPS=FPS*0.9+(1000/Math.max(1,dt))*0.1;
+  const g=$("#stage").getContext("2d");
+  if(!CLEAN){ requestAnimationFrame(loop); return; }
+  if(!EYES.length){ requestAnimationFrame(loop); return; }
+
+  const t0=performance.now();
+  const vert=+$("#vert").value, tau=+$("#tau").value;
+  const k=1-Math.exp(-dt/Math.max(1,tau));
+  const freeze=$("#freeze").checked;
+
+  for(const e of EYES){
+    const [tvx,tvy]=travel(e,vert);
+    if(freeze){ e.tx=tvx; e.ty=0; }
+    else if(PTR){
+      const dx=PTR.x-e.c.x, dy=PTR.y-e.c.y, d=Math.hypot(dx,dy)||1;
+      e.tx=Math.max(-1,Math.min(1,dx/d))*tvx;
+      e.ty=Math.max(-1,Math.min(1,dy/d))*tvy;
+    }else{ e.tx=0; e.ty=0; }
+    e.ox+=(e.tx-e.ox)*k; e.oy+=(e.ty-e.oy)*k;
+  }
+
+  // the eye boxes are the only thing that changes, so only they are redrawn
+  for(const e of EYES){
+    g.drawImage(CLEAN, e.bx,e.by,e.bw,e.bh, e.bx,e.by,e.bw,e.bh);   // reset
+    g.drawImage(e.plate, e.bx, e.by);                                // sclera, iris gone
+    g.save(); g.clip(e.path);                                        // stay under the lid
+    g.drawImage(e.sprite, e.c.x-e.SR+e.ox, e.c.y-e.SR+e.oy);
+    g.restore();
+  }
+  COST=COST*0.9+(performance.now()-t0)*0.1;
+
+  if($("#dbg").checked) overlay(g);
+  zoom();
+  if((t|0)%500<20) report();
+  requestAnimationFrame(loop);
+}
+function overlay(g){
+  g.save();
+  g.lineWidth=1;
+  for(const e of EYES){
+    g.strokeStyle="rgba(143,174,122,.85)"; g.stroke(e.path);
+    g.strokeStyle="rgba(201,138,63,.9)";
+    g.beginPath(); g.arc(e.c.x+e.ox, e.c.y+e.oy, e.r, 0, Math.PI*2); g.stroke();
+    g.strokeStyle="rgba(201,138,63,.35)";
+    g.strokeRect(e.c.x-e.maxX, e.c.y-e.maxY, e.maxX*2, e.maxY*2);
+  }
+  g.restore();
+}
+function zoom(){
+  EYES.forEach((e,i)=>{
+    const cv=$(i?"#zoomB":"#zoomA"); if(!cv) return;
+    const S=6, w=Math.round(e.bw*S), h=Math.round(e.bh*S);
+    if(cv.width!==w||cv.height!==h){ cv.width=w; cv.height=h; }
+    const z=cv.getContext("2d"); z.imageSmoothingEnabled=false;
+    z.drawImage($("#stage"), e.bx,e.by,e.bw,e.bh, 0,0,w,h);
+  });
+}
+
+/* ========================= input ========================= */
+const stage=$("#stage");
+function ptrFrom(ev){
+  const r=stage.getBoundingClientRect();
+  return {x:(ev.clientX-r.left)*(stage.width/r.width),
+          y:(ev.clientY-r.top)*(stage.height/r.height)};
+}
+stage.addEventListener("pointermove",ev=>{ PTR=ptrFrom(ev); });
+stage.addEventListener("pointerdown",ev=>{ PTR=ptrFrom(ev); });
+stage.addEventListener("pointerleave",()=>{ PTR=null; });
+
+for(const [id,dp] of [["amp",0],["vert",2],["tau",0],["feather",2],["blur",0],["hole",2],["yawMax",2]]){
+  $("#"+id).addEventListener("input",async e=>{
+    $("#"+id+"V").textContent=(+e.target.value).toFixed(dp);
+    // these three change the precomputed artefacts, so the eyes must be rebuilt
+    if(id==="feather"||id==="blur"||id==="hole"){
+      const opt={holeK:+$("#hole").value, feather:+$("#feather").value, blur:+$("#blur").value};
+      if(FACE){ EYES=[]; for(const s of ["L","R"]){const x=buildEye(CLEAN,FACE,W,H,s,opt); if(x)EYES.push(x);} }
+    }
+    report();
+  });
+}
+$("#pick").addEventListener("change",()=>{prepare();});
+$("#width").addEventListener("change",()=>{prepare();});
+$("#reload").addEventListener("click",()=>{prepare();});
+
+boot().catch(e=>{ $("#msg").textContent=e.message; });
+</script>
+</body>
+</html>
