@@ -76,14 +76,26 @@
   <div class="sec">
     <h2>2 · Tracking</h2>
     <p>Move the pointer over the painting. The left panel tracks; the right is the untouched original, held still for comparison — if you cannot tell them apart while the pointer is moving, the effect does not read, and that is the answer. <b>Measured on Holbein's Henry VIII at 620px:</b> the movement reads clearly. What does <i>not</i> hold up under the 6&times; zoom is the reconstructed sclera — watch the vacated side of each eye, not the iris.</p>
+    <!-- Control ids are deliberately not short generic words. An element id
+         becomes a property of `window` through named element access, so
+         id="dbg" made `window.dbg` an HTMLInputElement — and MediaPipe's wasm
+         glue contains, undeclared:
+
+           function custom_emscripten_dbgn(str,len){
+             if(typeof dbg!=="undefined"){ dbg(UTF8ToString(str,len)) } else ...
+
+         The guard passed, the call hit the checkbox, and the landmarker died
+         with "dbg is not a function" the first time MediaPipe tried to log
+         anything. id="blur" was the same trap one step away: it shadows
+         window.blur(). Keep these qualified. -->
     <div class="bar">
       <label class="f">Gaze&deg; <input type="range" id="amp" min="0" max="40" step="1" value="18"><span id="ampV">18</span></label>
       <label class="f">Vertical <input type="range" id="vert" min="0" max="1" step="0.05" value="0.45"><span id="vertV">0.45</span></label>
       <label class="f">Easing ms <input type="range" id="tau" min="10" max="400" step="10" value="120"><span id="tauV">120</span></label>
       <label class="f">Iris feather <input type="range" id="feather" min="0.02" max="0.45" step="0.01" value="0.14"><span id="featherV">0.14</span></label>
-      <label class="f">Plate blur <input type="range" id="blur" min="0" max="4" step="1" value="1"><span id="blurV">1</span></label>
+      <label class="f">Plate blur <input type="range" id="plateBlur" min="0" max="4" step="1" value="1"><span id="plateBlurV">1</span></label>
       <label class="f">Hole r <input type="range" id="hole" min="0.85" max="1.5" step="0.05" value="1.05"><span id="holeV">1.05</span></label>
-      <label class="f"><input type="checkbox" id="dbg"> Debug overlay</label>
+      <label class="f"><input type="checkbox" id="showOverlay"> Debug overlay</label>
       <label class="f"><input type="checkbox" id="freeze"> Freeze at extreme</label>
     </div>
     <div class="row">
@@ -429,7 +441,7 @@ async function prepare(){
     return;
   }
   YAW=yawAsym(FACE,W,H);
-  const opt={holeK:+$("#hole").value, feather:+$("#feather").value, blur:+$("#blur").value};
+  const opt={holeK:+$("#hole").value, feather:+$("#feather").value, blur:+$("#plateBlur").value};
   for(const side of ["L","R"]){
     const e=buildEye(CLEAN,FACE,W,H,side,opt);
     if(e) EYES.push(e);
@@ -525,7 +537,7 @@ function loop(t){
   }
   COST=COST*0.9+(performance.now()-t0)*0.1;
 
-  if($("#dbg").checked) overlay(g);
+  if($("#showOverlay").checked) overlay(g);
   zoom();
   if((t|0)%500<20) report();
   requestAnimationFrame(loop);
@@ -563,12 +575,12 @@ stage.addEventListener("pointermove",ev=>{ PTR=ptrFrom(ev); });
 stage.addEventListener("pointerdown",ev=>{ PTR=ptrFrom(ev); });
 stage.addEventListener("pointerleave",()=>{ PTR=null; });
 
-for(const [id,dp] of [["amp",0],["vert",2],["tau",0],["feather",2],["blur",0],["hole",2],["yawMax",2]]){
+for(const [id,dp] of [["amp",0],["vert",2],["tau",0],["feather",2],["plateBlur",0],["hole",2],["yawMax",2]]){
   $("#"+id).addEventListener("input",async e=>{
     $("#"+id+"V").textContent=(+e.target.value).toFixed(dp);
     // these three change the precomputed artefacts, so the eyes must be rebuilt
-    if(id==="feather"||id==="blur"||id==="hole"){
-      const opt={holeK:+$("#hole").value, feather:+$("#feather").value, blur:+$("#blur").value};
+    if(id==="feather"||id==="plateBlur"||id==="hole"){
+      const opt={holeK:+$("#hole").value, feather:+$("#feather").value, blur:+$("#plateBlur").value};
       if(FACE){ EYES=[]; for(const s of ["L","R"]){const x=buildEye(CLEAN,FACE,W,H,s,opt); if(x)EYES.push(x);} }
     }
     report();
