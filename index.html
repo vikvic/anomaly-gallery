@@ -1125,8 +1125,15 @@ function stopBlinking(a){
    Direction alternates rather than being random, so the sitter reads as
    looking around the room instead of twitching.
    ========================================================================== */
-const GLANCE={GAP:[3600,7200], FIRST:[2200,4800], OUT:190, HOLD:[620,1150], BACK:280,
-              DEG:14};
+/* DEG is 21.3 rather than 14 because travel is ballR*sin(theta), so getting
+   50% more movement means 50% more sine, not 50% more angle:
+   asin(1.5 * sin 14) = 21.28. That is 6.5px against 4.3px on a 620px canvas.
+   Headroom is now thin — the narrower eye measured maxX=7.0px — so on some
+   sitters Math.min below will start clamping to the sclera edge rather than
+   the requested angle. That is the intended failure: the iris stops at the
+   corner instead of sliding under the lid. */
+const GLANCE={GAP:[3600,7200], FIRST:[2200,4800], OUT:285, HOLD:[930,1725], BACK:420,
+              DEG:21.3};
 const rnd=([a,b])=>a+Math.random()*(b-a);
 
 function drawGlance(w,a){
